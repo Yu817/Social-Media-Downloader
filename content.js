@@ -1,7 +1,32 @@
-// Threads Media Downloader Content Script - Fixed Viewport Overlay Version
+// Threads Media Downloader Content Script - With Toggle & Settings Support
 
 (function () {
   'use strict';
+
+  // Only run on Threads
+  if (!window.location.hostname.includes('threads.net') && !window.location.hostname.includes('threads.com')) {
+    return;
+  }
+
+  let isExtensionEnabled = true;
+
+  // Load initial settings
+  chrome.storage.local.get(['extensionEnabled'], (data) => {
+    if (data.extensionEnabled === false) {
+      isExtensionEnabled = false;
+      hideFloatingButton();
+    }
+  });
+
+  // Listen for setting changes from Popup in real-time
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes.extensionEnabled) {
+      isExtensionEnabled = changes.extensionEnabled.newValue !== false;
+      if (!isExtensionEnabled) {
+        hideFloatingButton();
+      }
+    }
+  });
 
   console.log(
     '%c[Threads Downloader] Content script loaded & active! (%s)',
@@ -64,7 +89,7 @@
     return videoElement.currentSrc || null;
   }
 
-  // Resolve media URL to downloadable string
+  // Resolve media URL
   async function resolveMediaUrl(element, type) {
     let url = type === 'video' ? getVideoUrl(element) : getHighResImageUrl(element);
     if (!url) return null;
@@ -85,7 +110,7 @@
     return url;
   }
 
-  // Single global floating download button positioned with fixed viewport coordinates
+  // Global floating download button
   let activeFloatingBtn = null;
   let activeMediaElement = null;
   let activeMediaType = null;
@@ -104,7 +129,7 @@
       e.preventDefault();
       e.stopPropagation();
 
-      if (!activeMediaElement) return;
+      if (!activeMediaElement || !isExtensionEnabled) return;
 
       btn.classList.add('tmd-loading');
       btn.innerHTML = SVG_LOADING;
@@ -158,11 +183,6 @@
       );
     });
 
-    // Hide button if mouse moves far away from media
-    btn.addEventListener('mouseleave', () => {
-      // Keep visible unless target changed
-    });
-
     document.body.appendChild(btn);
     activeFloatingBtn = btn;
     return btn;
@@ -170,6 +190,11 @@
 
   // Update floating button position
   function updateFloatingButtonPosition(mediaElement, type) {
+    if (!isExtensionEnabled) {
+      hideFloatingButton();
+      return;
+    }
+
     const btn = createGlobalFloatingButton();
     const rect = mediaElement.getBoundingClientRect();
 
@@ -199,16 +224,19 @@
     }
   }
 
-  // Global mousemove listener to detect media hover instantly
+  // Global mousemove listener
   let hoverCheckTimer = null;
   document.addEventListener('mousemove', (e) => {
+    if (!isExtensionEnabled) {
+      hideFloatingButton();
+      return;
+    }
+
     const target = e.target;
     if (!target) return;
 
-    // Check if hovering over download button itself
     if (target.closest('.tmd-download-btn')) return;
 
-    // Find image or video under cursor or parent
     let media = null;
     let type = 'image';
 
@@ -219,7 +247,6 @@
       media = target;
       type = 'video';
     } else {
-      // Check if target is overlay inside a media box
       const parentMedia = target.closest('div, a');
       if (parentMedia) {
         const img = parentMedia.querySelector('img');
@@ -239,7 +266,6 @@
       const width = media.naturalWidth || media.videoWidth || rect.width;
       const height = media.naturalHeight || media.videoHeight || rect.height;
 
-      // Filter out small avatars
       if (width >= 80 && height >= 80 && rect.width >= 80 && rect.height >= 80) {
         const alt = (media.alt || '').toLowerCase();
         if (!alt.includes('profile picture') && !alt.includes('頭像') && !alt.includes('大頭貼') && !alt.includes('avatar')) {
@@ -249,25 +275,22 @@
       }
     }
 
-    // Throttled hide if mouse is not over media
     if (hoverCheckTimer) clearTimeout(hoverCheckTimer);
     hoverCheckTimer = setTimeout(() => {
       hideFloatingButton();
     }, 400);
   }, { passive: true });
 
-  // Handle scroll / resize to adjust button position dynamically
   window.addEventListener('scroll', () => {
-    if (activeMediaElement && activeFloatingBtn && activeFloatingBtn.style.display !== 'none') {
+    if (isExtensionEnabled && activeMediaElement && activeFloatingBtn && activeFloatingBtn.style.display !== 'none') {
       updateFloatingButtonPosition(activeMediaElement, activeMediaType);
     }
   }, { passive: true });
 
   window.addEventListener('resize', () => {
-    if (activeMediaElement && activeFloatingBtn && activeFloatingBtn.style.display !== 'none') {
+    if (isExtensionEnabled && activeMediaElement && activeFloatingBtn && activeFloatingBtn.style.display !== 'none') {
       updateFloatingButtonPosition(activeMediaElement, activeMediaType);
     }
   }, { passive: true });
 
-  console.log('[Threads Downloader] Global viewport hover listener initialized.');
 })();
