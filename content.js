@@ -268,6 +268,114 @@
     return null;
   }
 
+  // =========================================================================
+  // INSTAGRAM STORIES: Deep React Store scan for video_versions with audio
+  // Instagram stores the full item data in __additionalData / store state
+  // =========================================================================
+  function scanWindowForStoryVideoUrl() {
+    // Approach 1: IG injects __additionalData with full story items
+    try {
+      const ad = window.__additionalData;
+      if (ad) {
+        const str = JSON.stringify(ad);
+        // Quick bail if no video_versions present
+        if (str.includes('video_versions')) {
+          const parsed = ad;
+          const url = deepFindVideoUrl(parsed, new WeakSet());
+          if (url) return url;
+        }
+      }
+    } catch (e) {}
+
+    // Approach 2: IG React Store exposed as __reactReduxStore or similar
+    try {
+      const storeKeys = ['__reduxStore', '__reactStore', '__store'];
+      for (const k of storeKeys) {
+        if (window[k] && typeof window[k].getState === 'function') {
+          const state = window[k].getState();
+          const url = deepFindVideoUrl(state, new WeakSet());
+          if (url) return url;
+        }
+      }
+    } catch (e) {}
+
+    return null;
+  }
+
+  // Deep-scan any object tree for IG video_versions URLs
+  function deepFindVideoUrl(obj, visited, depth = 0) {
+    if (!obj || depth > 8 || typeof obj !== 'object') return null;
+    if (visited.has(obj)) return null;
+    visited.add(obj);
+
+    if (Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
+      // Sort by quality (width desc) and pick one with audio if possible
+      const sorted = [...obj.video_versions].sort((a, b) => (b.width || 0) - (a.width || 0));
+      for (const v of sorted) {
+        if (v && v.url && !isAudioOnlyUrl(v.url)) {
+          return cleanVideoUrl(v.url);
+        }
+      }
+    }
+
+    try {
+      for (const key of Object.keys(obj)) {
+        if (
+          key === 'video_versions' || key === 'items' || key === 'story' ||
+          key === 'media' || key === 'reel' || key === 'reels'
+        ) {
+          const result = deepFindVideoUrl(obj[key], visited, depth + 1);
+          if (result) return result;
+        }
+      }
+    } catch (e) {}
+
+    return null;
+  }
+
+  // Fetch the current IG story item via the API v1 endpoint (uses session cookie)
+  async function fetchStoryItemFromApi(username) {
+    if (!username) return null;
+    const endpoints = [
+      `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${username}`,
+      `https://www.instagram.com/api/v1/feed/user/${username}/story/`,
+    ];
+    for (const url of endpoints) {
+      try {
+        const res = await fetch(url, {
+          credentials: 'include',
+          headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-IG-App-ID': '936619743392459' }
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+        // Try reels_media format
+        const reels = data?.reels || data?.reels_media || {};
+        for (const key of Object.keys(reels)) {
+          const items = reels[key]?.items;
+          if (Array.isArray(items)) {
+            for (const item of items) {
+              if (item?.video_versions?.length > 0) {
+                return cleanVideoUrl(item.video_versions[0].url);
+              }
+            }
+          }
+        }
+        // Try story feed format
+        const items2 = data?.reel?.items || data?.items;
+        if (Array.isArray(items2)) {
+          for (const item of items2) {
+            if (item?.video_versions?.length > 0) {
+              return cleanVideoUrl(item.video_versions[0].url);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[Social Media Downloader] IG Story API endpoint failed:', url, e);
+      }
+    }
+    return null;
+  }
+
   // Fetch Instagram post/reel progressive MP4 via Info API
   async function fetchInstagramProgressiveVideo(shortcode) {
     if (!shortcode) return null;
@@ -346,108 +454,53 @@
     return null;
   }
 
-  // Dual-Track Live MediaStream Capture Engine (Guarantees 100% Video + Stereo Audio for IG Stories)
-  async function captureAndDownloadLiveStream(videoElement, btn) {
-    btn.classList.add('tmd-loading');
-    btn.setAttribute('data-tooltip', '擷取影音雙軌中...');
+  // =========================================================================
+  // IG STORIES AUDIO FIX: Multi-strategy resolver for story video WITH audio
+  // Strategy order:
+  //   1. React fiber deep scan (video_versions array)
+  //   2. window.__additionalData / Redux store scan
+  //   3. IG API v1 fetch (uses session cookie)
+  //   4. performance.getEntriesByType scan for progressive MP4 in network log
+  // We do NOT use captureStream() because IG plays audio via Web AudioContext
+  // which is invisible to captureStream - it would always give silent video.
+  // =========================================================================
+  async function resolveStoryVideoWithAudio(videoElement, btn) {
+    btn.setAttribute('data-tooltip', '解析限動原聲影片...');
 
-    try {
-      let stream = null;
-      if (typeof videoElement.captureStream === 'function') {
-        stream = videoElement.captureStream();
-      } else if (typeof videoElement.mozCaptureStream === 'function') {
-        stream = videoElement.mozCaptureStream();
-      }
+    const pathname = window.location.pathname;
+    const storyMatch = pathname.match(/\/stories\/([^/]+)/);
+    const username = storyMatch ? storyMatch[1] : null;
 
-      if (!stream) {
-        throw new Error('captureStream API unsupported');
-      }
-
-      let audioTracks = stream.getAudioTracks();
-      if (audioTracks.length === 0) {
-        const audioEls = document.querySelectorAll('audio');
-        for (const aEl of audioEls) {
-          if (!aEl.paused && typeof aEl.captureStream === 'function') {
-            const aStream = aEl.captureStream();
-            const aTracks = aStream.getAudioTracks();
-            if (aTracks.length > 0) {
-              audioTracks = aTracks;
-              break;
-            }
-          }
-        }
-      }
-
-      const combinedStream = new MediaStream();
-      stream.getVideoTracks().forEach(t => combinedStream.addTrack(t));
-      audioTracks.forEach(t => combinedStream.addTrack(t));
-
-      let mimeType = 'video/webm;codecs=vp9,opus';
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'video/webm;codecs=vp8,opus';
-      }
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'video/webm';
-      }
-
-      const mediaRecorder = new MediaRecorder(combinedStream, { mimeType });
-      const chunks = [];
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          chunks.push(e.data);
-        }
-      };
-
-      if (videoElement.duration && videoElement.currentTime > videoElement.duration - 1) {
-        videoElement.currentTime = 0;
-      }
-
-      const remTime = (videoElement.duration && !isNaN(videoElement.duration)) ? (videoElement.duration - videoElement.currentTime) * 1000 : 8000;
-      const captureDuration = Math.min(Math.max(remTime, 3000), 18000);
-
-      mediaRecorder.start(100);
-      btn.setAttribute('data-tooltip', '正在同步音畫錄製中...');
-
-      await new Promise((resolve) => setTimeout(resolve, captureDuration));
-
-      if (mediaRecorder.state !== 'inactive') {
-        mediaRecorder.stop();
-      }
-
-      await new Promise((resolve) => {
-        mediaRecorder.onstop = resolve;
-        setTimeout(resolve, 400);
-      });
-
-      const recordedBlob = new Blob(chunks, { type: mimeType });
-      const blobUrl = URL.createObjectURL(recordedBlob);
-
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = `IG_Story_${Date.now()}.${mimeType.includes('webm') ? 'webm' : 'mp4'}`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
-
-      btn.classList.remove('tmd-loading');
-      btn.classList.add('tmd-success');
-      btn.innerHTML = SVG_CHECK;
-      btn.setAttribute('data-tooltip', '已完成原音下載！');
-
-      setTimeout(() => {
-        btn.classList.remove('tmd-success');
-        btn.innerHTML = SVG_DOWNLOAD;
-        btn.setAttribute('data-tooltip', '下載影片');
-      }, 2500);
-
-      return true;
-    } catch (err) {
-      console.warn('[Social Media Downloader] Live MediaStream capture fallback failed:', err);
-      return false;
+    // Strategy 1: React fiber scan on the video element
+    const fiberUrl = getUrlFromReactFiber(videoElement);
+    if (fiberUrl && !isAudioOnlyUrl(fiberUrl) && !fiberUrl.startsWith('blob:')) {
+      console.log('[Social Media Downloader] IG Story URL from React fiber:', fiberUrl);
+      return fiberUrl;
     }
+
+    // Strategy 2: window.__additionalData / Redux store
+    const storeUrl = scanWindowForStoryVideoUrl();
+    if (storeUrl && !isAudioOnlyUrl(storeUrl) && !storeUrl.startsWith('blob:')) {
+      console.log('[Social Media Downloader] IG Story URL from window store:', storeUrl);
+      return storeUrl;
+    }
+
+    // Strategy 3: IG API v1 (requires logged-in session cookie)
+    btn.setAttribute('data-tooltip', '從 IG API 取得原聲影片...');
+    const apiUrl = await fetchStoryItemFromApi(username);
+    if (apiUrl && !isAudioOnlyUrl(apiUrl)) {
+      console.log('[Social Media Downloader] IG Story URL from API:', apiUrl);
+      return apiUrl;
+    }
+
+    // Strategy 4: Network performance log - look for any non-audio MP4 recently loaded
+    const netUrl = getNetworkVideoUrl();
+    if (netUrl && !netUrl.startsWith('blob:')) {
+      console.log('[Social Media Downloader] IG Story URL from network log:', netUrl);
+      return netUrl;
+    }
+
+    return null;
   }
 
   // =========================================================================
@@ -625,13 +678,41 @@
 
       const type = activeMediaType;
 
-      // Special IG Stories Live Capture Engine Trigger if direct progressive URL unavailable
+      // IG Stories: ALWAYS use dedicated audio resolver (never captureStream)
       if (isInstagram && type === 'video' && window.location.pathname.includes('/stories/')) {
-        const mediaUrl = await resolveMediaUrl(activeMediaElement, type);
-        if (!mediaUrl || mediaUrl.includes('dash') || mediaUrl.startsWith('blob:')) {
-          const success = await captureAndDownloadLiveStream(activeMediaElement, btn);
-          if (success) return;
+        const storyUrl = await resolveStoryVideoWithAudio(activeMediaElement, btn);
+        if (storyUrl) {
+          btn.setAttribute('data-tooltip', '下載中...');
+          try {
+            chrome.runtime.sendMessage(
+              { action: 'download', url: storyUrl, type: 'video', ext: 'mp4', site: 'Instagram' },
+              (response) => {
+                btn.classList.remove('tmd-loading');
+                if (chrome.runtime.lastError || (response && !response.success)) {
+                  triggerSilentDirectDownload(storyUrl, 'video', 'mp4', btn);
+                } else {
+                  btn.classList.add('tmd-success');
+                  btn.innerHTML = SVG_CHECK;
+                  btn.setAttribute('data-tooltip', '已開始下載！');
+                  setTimeout(() => {
+                    btn.classList.remove('tmd-success');
+                    btn.innerHTML = SVG_DOWNLOAD;
+                    btn.setAttribute('data-tooltip', '下載影片');
+                  }, 2500);
+                }
+              }
+            );
+          } catch (err) {
+            triggerSilentDirectDownload(storyUrl, 'video', 'mp4', btn);
+          }
+        } else {
+          // All strategies failed - tell the user
+          btn.classList.remove('tmd-loading');
+          btn.innerHTML = SVG_DOWNLOAD;
+          btn.setAttribute('data-tooltip', '限動下載失敗，請重新整理頁面再試');
+          setTimeout(() => btn.setAttribute('data-tooltip', '下載影片'), 3000);
         }
+        return;
       }
 
       const mediaUrl = await resolveMediaUrl(activeMediaElement, type);
