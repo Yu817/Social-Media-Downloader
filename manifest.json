@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Threads Media Downloader",
-  "version": "1.1.0",
-  "description": "Threads 貼文圖片與影片右上角顯示下載按鈕，一鍵下載高畫質媒體素材。",
+  "name": "Social Media Downloader (Threads, IG, X, FB)",
+  "version": "1.2.0",
+  "description": "支援 Threads, Instagram, X (Twitter), Facebook, Pinterest 一鍵下載高畫質圖片與影片。",
   "permissions": [
     "downloads",
     "activeTab",

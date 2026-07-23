@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Threads Media Downloader Settings</title>
+  <title>Social Media Downloader Settings</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
@@ -13,8 +13,8 @@
       <div class="brand">
         <img src="icons/icon48.png" alt="Logo" class="logo">
         <div>
-          <h1 class="title">Threads Downloader</h1>
-          <span class="version">v1.1.0</span>
+          <h1 class="title">Media Downloader</h1>
+          <span class="version">v1.2.0 Multi-Platform</span>
         </div>
       </div>
       <div id="statusBadge" class="status-badge active">
@@ -27,12 +27,24 @@
     <div class="card switch-card">
       <div class="card-info">
         <span class="card-title">啟用懸停下載按鈕</span>
-        <span class="card-desc">移至 Threads 圖片/影片時顯示下載圖示</span>
+        <span class="card-desc">移至貼文圖片/影片時顯示下載圖示</span>
       </div>
       <label class="toggle-switch">
         <input type="checkbox" id="extensionToggle" checked>
         <span class="slider"></span>
       </label>
+    </div>
+
+    <!-- Supported Platforms Badge List -->
+    <div class="card platforms-card">
+      <span class="card-title">🌐 已支援的社群媒體平台</span>
+      <div class="platform-tags">
+        <span class="tag">Threads</span>
+        <span class="tag">Instagram</span>
+        <span class="tag">X (Twitter)</span>
+        <span class="tag">Facebook</span>
+        <span class="tag">Pinterest</span>
+      </div>
     </div>
 
     <!-- Filename Setting Card -->
@@ -42,11 +54,11 @@
       </div>
       <div class="setting-group">
         <select id="filenameFormatSelect" class="select-input">
-          <option value="default">預設 (Threads_Media_時間)</option>
+          <option value="default">預設 (平台_Media_時間)</option>
           <option value="custom">自訂字首 (自訂前綴_時間)</option>
         </select>
         <div id="customPrefixContainer" class="custom-prefix-box hidden">
-          <input type="text" id="customPrefixInput" class="text-input" placeholder="輸入前綴 (例: MySaved)" value="Threads_Media">
+          <input type="text" id="customPrefixInput" class="text-input" placeholder="輸入前綴 (例: MySaved)" value="Social_Media">
         </div>
       </div>
     </div>
@@ -65,7 +77,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-      <span>Threads Media Downloader &copy; 2026</span>
+      <span>Social Media Downloader &copy; 2026</span>
     </footer>
   </div>
 

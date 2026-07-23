@@ -1,12 +1,16 @@
-// Threads Media Downloader Content Script - With Toggle & Settings Support
+// Social Media Downloader Content Script - Multi-Platform Support
 
 (function () {
   'use strict';
 
-  // Only run on Threads
-  if (!window.location.hostname.includes('threads.net') && !window.location.hostname.includes('threads.com')) {
-    return;
-  }
+  const host = window.location.hostname.toLowerCase();
+
+  // Platform Detection
+  const isThreads = host.includes('threads.net') || host.includes('threads.com');
+  const isInstagram = host.includes('instagram.com');
+  const isTwitter = host.includes('twitter.com') || host.includes('x.com');
+  const isFacebook = host.includes('facebook.com');
+  const isPinterest = host.includes('pinterest.com');
 
   let isExtensionEnabled = true;
 
@@ -18,7 +22,7 @@
     }
   });
 
-  // Listen for setting changes from Popup in real-time
+  // Listen for setting changes from Popup
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === 'local' && changes.extensionEnabled) {
       isExtensionEnabled = changes.extensionEnabled.newValue !== false;
@@ -29,9 +33,8 @@
   });
 
   console.log(
-    '%c[Threads Downloader] Content script loaded & active! (%s)',
-    'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;',
-    window.location.href
+    '%c[Social Media Downloader] Content script active on: ' + window.location.hostname,
+    'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
   const SVG_DOWNLOAD = `
@@ -55,8 +58,25 @@
     </svg>
   `;
 
-  // Get highest resolution image URL from srcset or src
+  // Platform-Specific High-Resolution Image Resolver
   function getHighResImageUrl(imgElement) {
+    let rawSrc = imgElement.currentSrc || imgElement.src || '';
+
+    // Twitter / X Original Quality Transformer
+    if (isTwitter && rawSrc.includes('twimg.com')) {
+      if (rawSrc.includes('name=')) {
+        return rawSrc.replace(/name=\w+/, 'name=orig');
+      } else if (rawSrc.includes('?format=')) {
+        return `${rawSrc}&name=orig`;
+      }
+    }
+
+    // Pinterest Original Image Transformer
+    if (isPinterest && rawSrc.includes('pinimg.com')) {
+      return rawSrc.replace(/\/(236x|474x|564x|736x)\//, '/originals/');
+    }
+
+    // Parse srcset for Threads, Instagram, Facebook, and general sites
     const srcset = imgElement.getAttribute('srcset');
     if (srcset) {
       const candidates = srcset.split(',').map(item => {
@@ -76,10 +96,11 @@
         return candidates[0].url;
       }
     }
-    return imgElement.currentSrc || imgElement.src;
+
+    return rawSrc;
   }
 
-  // Get video source URL
+  // Video Source Resolver
   function getVideoUrl(videoElement) {
     if (videoElement.src) return videoElement.src;
     const sources = videoElement.querySelectorAll('source');
@@ -89,7 +110,7 @@
     return videoElement.currentSrc || null;
   }
 
-  // Resolve media URL
+  // Resolve media URL to downloadable string
   async function resolveMediaUrl(element, type) {
     let url = type === 'video' ? getVideoUrl(element) : getHighResImageUrl(element);
     if (!url) return null;
@@ -104,7 +125,7 @@
           reader.readAsDataURL(blob);
         });
       } catch (e) {
-        console.warn('[Threads Downloader] Blob fetch fallback:', e);
+        console.warn('[Social Media Downloader] Blob fetch fallback:', e);
       }
     }
     return url;
@@ -156,13 +177,14 @@
           action: 'download',
           url: mediaUrl,
           type: type,
-          ext: ext
+          ext: ext,
+          site: isTwitter ? 'Twitter' : isInstagram ? 'Instagram' : isThreads ? 'Threads' : isFacebook ? 'Facebook' : isPinterest ? 'Pinterest' : 'Social'
         },
         (response) => {
           btn.classList.remove('tmd-loading');
 
           if (chrome.runtime.lastError || (response && !response.success)) {
-            console.error('[Threads Downloader] Download Error:', chrome.runtime.lastError || response?.error);
+            console.error('[Social Media Downloader] Download Error:', chrome.runtime.lastError || response?.error);
             btn.innerHTML = SVG_DOWNLOAD;
             btn.setAttribute('data-tooltip', '下載失敗');
             setTimeout(() => {
@@ -247,7 +269,7 @@
       media = target;
       type = 'video';
     } else {
-      const parentMedia = target.closest('div, a');
+      const parentMedia = target.closest('div, a, article, figure');
       if (parentMedia) {
         const img = parentMedia.querySelector('img');
         const video = parentMedia.querySelector('video');

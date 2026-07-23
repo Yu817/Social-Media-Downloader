@@ -123,6 +123,29 @@ body {
   flex-direction: column;
 }
 
+/* Platforms Card */
+.platforms-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.platform-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag {
+  background: #262626;
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
 /* Toggle Switch */
 .toggle-switch {
   position: relative;
