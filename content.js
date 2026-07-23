@@ -268,32 +268,54 @@
     return null;
   }
 
-  // =========================================================================
-  // INSTAGRAM STORIES: Deep React Store scan for video_versions with audio
-  // Instagram stores the full item data in __additionalData / store state
-  // =========================================================================
-  function scanWindowForStoryVideoUrl() {
-    // Approach 1: IG injects __additionalData with full story items
+  // Shallow React Fiber Walker: Only scans the element and its immediate 3 DOM parents,
+  // climbing at most 5 fiber.return levels. Used for IG Stories to avoid picking up
+  // video_versions data from adjacent pre-loaded story items in the fiber tree.
+  function getUrlFromReactFiberShallow(element) {
+    let curr = element;
+    let domDepth = 0;
+    const visited = new WeakSet();
+
+    while (curr && domDepth < 4 && curr !== document.body) {
+      for (const key in curr) {
+        if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$') || key.startsWith('__reactProps$')) {
+          let fiber = curr[key];
+          let fiberDepth = 0;
+
+          while (fiber && fiberDepth < 5) {
+            const props = fiber.memoizedProps || fiber.pendingProps;
+            if (props) {
+              const found = searchPropsForVideoVersions(props, 0, visited);
+              if (found) return found;
+            }
+            fiber = fiber.return;
+            fiberDepth++;
+          }
+        }
+      }
+      curr = curr.parentElement;
+      domDepth++;
+    }
+    return null;
+  }
+
+  // Scan window.__additionalData and Redux stores for story video URL
+  // storyId: when provided, only return a URL for that specific story item
+  function scanWindowForStoryVideoUrl(storyId) {
     try {
       const ad = window.__additionalData;
       if (ad) {
-        const str = JSON.stringify(ad);
-        // Quick bail if no video_versions present
-        if (str.includes('video_versions')) {
-          const parsed = ad;
-          const url = deepFindVideoUrl(parsed, new WeakSet());
-          if (url) return url;
-        }
+        const url = deepFindVideoUrl(ad, new WeakSet(), 0, storyId);
+        if (url) return url;
       }
     } catch (e) {}
 
-    // Approach 2: IG React Store exposed as __reactReduxStore or similar
     try {
       const storeKeys = ['__reduxStore', '__reactStore', '__store'];
       for (const k of storeKeys) {
         if (window[k] && typeof window[k].getState === 'function') {
           const state = window[k].getState();
-          const url = deepFindVideoUrl(state, new WeakSet());
+          const url = deepFindVideoUrl(state, new WeakSet(), 0, storyId);
           if (url) return url;
         }
       }
@@ -303,13 +325,21 @@
   }
 
   // Deep-scan any object tree for IG video_versions URLs
-  function deepFindVideoUrl(obj, visited, depth = 0) {
+  // storyId: when provided, only return a URL from an item whose pk/id matches
+  function deepFindVideoUrl(obj, visited, depth = 0, storyId = null) {
     if (!obj || depth > 8 || typeof obj !== 'object') return null;
     if (visited.has(obj)) return null;
     visited.add(obj);
 
     if (Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
-      // Sort by quality (width desc) and pick one with audio if possible
+      // If storyId provided, check that this object's pk or id matches
+      if (storyId) {
+        const itemPk = String(obj.pk || obj.id || '');
+        if (itemPk && itemPk !== String(storyId)) {
+          // pk exists but doesn't match — skip this item
+          return null;
+        }
+      }
       const sorted = [...obj.video_versions].sort((a, b) => (b.width || 0) - (a.width || 0));
       for (const v of sorted) {
         if (v && v.url && !isAudioOnlyUrl(v.url)) {
@@ -324,7 +354,7 @@
           key === 'video_versions' || key === 'items' || key === 'story' ||
           key === 'media' || key === 'reel' || key === 'reels'
         ) {
-          const result = deepFindVideoUrl(obj[key], visited, depth + 1);
+          const result = deepFindVideoUrl(obj[key], visited, depth + 1, storyId);
           if (result) return result;
         }
       }
@@ -334,7 +364,9 @@
   }
 
   // Fetch the current IG story item via the API v1 endpoint (uses session cookie)
-  async function fetchStoryItemFromApi(username) {
+  // storyId: the exact item ID from the URL (/stories/username/STORY_ID/)
+  // When storyId is provided, we match item.pk to guarantee we get the right story.
+  async function fetchStoryItemFromApi(username, storyId) {
     if (!username) return null;
     const endpoints = [
       `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${username}`,
@@ -348,22 +380,36 @@
         });
         if (!res.ok) continue;
         const data = await res.json();
-        // Try reels_media format
+
+        // Collect all story items from either response format
+        const allItems = [];
+        // reels_media format
         const reels = data?.reels || data?.reels_media || {};
         for (const key of Object.keys(reels)) {
           const items = reels[key]?.items;
-          if (Array.isArray(items)) {
-            for (const item of items) {
-              if (item?.video_versions?.length > 0) {
-                return cleanVideoUrl(item.video_versions[0].url);
-              }
-            }
+          if (Array.isArray(items)) allItems.push(...items);
+        }
+        // story feed format
+        const items2 = data?.reel?.items || data?.items;
+        if (Array.isArray(items2)) allItems.push(...items2);
+
+        if (allItems.length === 0) continue;
+
+        // If we have a story_id, find the EXACT matching item first
+        if (storyId) {
+          const exactItem = allItems.find(item =>
+            String(item?.pk) === String(storyId) ||
+            String(item?.id) === String(storyId)
+          );
+          if (exactItem?.video_versions?.length > 0) {
+            console.log('[Social Media Downloader] Matched story item by pk/id:', exactItem.pk);
+            return cleanVideoUrl(exactItem.video_versions[0].url);
           }
         }
-        // Try story feed format
-        const items2 = data?.reel?.items || data?.items;
-        if (Array.isArray(items2)) {
-          for (const item of items2) {
+
+        // Fallback: return first item with video (only if no storyId to match)
+        if (!storyId) {
+          for (const item of allItems) {
             if (item?.video_versions?.length > 0) {
               return cleanVideoUrl(item.video_versions[0].url);
             }
@@ -456,50 +502,46 @@
 
   // =========================================================================
   // IG STORIES AUDIO FIX: Multi-strategy resolver for story video WITH audio
-  // Strategy order:
-  //   1. React fiber deep scan (video_versions array)
-  //   2. window.__additionalData / Redux store scan
-  //   3. IG API v1 fetch (uses session cookie)
-  //   4. performance.getEntriesByType scan for progressive MP4 in network log
-  // We do NOT use captureStream() because IG plays audio via Web AudioContext
-  // which is invisible to captureStream - it would always give silent video.
+  // Uses the story_id from the URL to EXACTLY identify the current story.
   // =========================================================================
   async function resolveStoryVideoWithAudio(videoElement, btn) {
     btn.setAttribute('data-tooltip', '解析限動原聲影片...');
 
     const pathname = window.location.pathname;
-    const storyMatch = pathname.match(/\/stories\/([^/]+)/);
+    // URL format: /stories/username/story_id/
+    const storyMatch = pathname.match(/\/stories\/([^/]+)(?:\/(\d+))?/);
     const username = storyMatch ? storyMatch[1] : null;
+    const storyId = storyMatch ? storyMatch[2] : null; // The specific story item ID
 
-    // Strategy 1: React fiber scan on the video element
-    const fiberUrl = getUrlFromReactFiber(videoElement);
+    console.log('[Social Media Downloader] Resolving story:', { username, storyId });
+
+    // Strategy 1: React fiber scan DIRECTLY on the video element (shallow, max 5 parent levels)
+    // Shallow scan avoids picking up pre-loaded adjacent stories from neighboring fiber nodes
+    const fiberUrl = getUrlFromReactFiberShallow(videoElement);
     if (fiberUrl && !isAudioOnlyUrl(fiberUrl) && !fiberUrl.startsWith('blob:')) {
-      console.log('[Social Media Downloader] IG Story URL from React fiber:', fiberUrl);
+      console.log('[Social Media Downloader] IG Story URL from React fiber (shallow):', fiberUrl);
       return fiberUrl;
     }
 
-    // Strategy 2: window.__additionalData / Redux store
-    const storeUrl = scanWindowForStoryVideoUrl();
+    // Strategy 2: window.__additionalData scan filtered by storyId
+    const storeUrl = scanWindowForStoryVideoUrl(storyId);
     if (storeUrl && !isAudioOnlyUrl(storeUrl) && !storeUrl.startsWith('blob:')) {
       console.log('[Social Media Downloader] IG Story URL from window store:', storeUrl);
       return storeUrl;
     }
 
-    // Strategy 3: IG API v1 (requires logged-in session cookie)
+    // Strategy 3: IG API v1 - fetch story reel and match by story_id (item.pk)
     btn.setAttribute('data-tooltip', '從 IG API 取得原聲影片...');
-    const apiUrl = await fetchStoryItemFromApi(username);
+    const apiUrl = await fetchStoryItemFromApi(username, storyId);
     if (apiUrl && !isAudioOnlyUrl(apiUrl)) {
-      console.log('[Social Media Downloader] IG Story URL from API:', apiUrl);
+      console.log('[Social Media Downloader] IG Story URL from API (matched story_id):', apiUrl);
       return apiUrl;
     }
 
-    // Strategy 4: Network performance log - look for any non-audio MP4 recently loaded
-    const netUrl = getNetworkVideoUrl();
-    if (netUrl && !netUrl.startsWith('blob:')) {
-      console.log('[Social Media Downloader] IG Story URL from network log:', netUrl);
-      return netUrl;
-    }
-
+    // Note: We intentionally do NOT fall back to getNetworkVideoUrl() here.
+    // That function scans recent network requests and would return whichever
+    // story was most recently pre-fetched by IG, NOT necessarily the one you are viewing.
+    console.warn('[Social Media Downloader] All story URL strategies failed for story_id:', storyId);
     return null;
   }
 
