@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.2.7 Full Video Track Priority Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.3.0 Silent Direct Download Version)
 
 (function () {
   'use strict';
@@ -43,7 +43,7 @@
   }
 
   console.log(
-    '%c[Social Media Downloader v1.2.7] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.3.0] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -83,18 +83,15 @@
     if (!url) return false;
     const lower = url.toLowerCase();
 
-    // Direct string keyword checks
     if (lower.includes('dash_audio') || lower.includes('_a.mp4') || lower.includes('mime=audio') || lower.includes('audio_') || lower.includes('.mp3')) {
       return true;
     }
 
-    // Decode Meta efg Base64 parameter to detect hidden audio streams
     if (lower.includes('efg=')) {
       try {
         const efgMatch = url.match(/[?&]efg=([^&]+)/);
         if (efgMatch && efgMatch[1]) {
           let b64 = decodeURIComponent(efgMatch[1]);
-          // Standard base64 decode
           let decoded = window.atob(b64);
           if (decoded.includes('audio')) {
             return true;
@@ -112,7 +109,6 @@
     const src = (img.currentSrc || img.src || '').toLowerCase();
     const alt = (img.alt || '').toLowerCase();
 
-    // 1. Meta / IG / Twitter / FB CDN URL-based Avatar Signature
     if (src.includes('t51.2885-19') || src.includes('t51.36379-19') || src.includes('s150x150') || src.includes('s320x320') || src.includes('/profile_images/')) {
       return true;
     }
@@ -120,12 +116,10 @@
       return true;
     }
 
-    // 2. Multilingual Alt Keyword Check
     if (alt.includes('profile') || alt.includes('avatar') || alt.includes('頭像') || alt.includes('大頭貼') || alt.includes('写真') || alt.includes('perfil')) {
       return true;
     }
 
-    // 3. Header & Profile Link Container Check
     if (img.closest('header')) return true;
 
     const parentAnchor = img.closest('a');
@@ -139,7 +133,6 @@
       }
     }
 
-    // 4. Relative Area Comparison vs Post Media
     const rect = img.getBoundingClientRect();
     if (rect.width < 120 || rect.height < 120) {
       const article = img.closest('article, section, [role="article"]');
@@ -168,7 +161,6 @@
             const val = curr[key];
             const jsonStr = JSON.stringify(val);
             
-            // Search for video_versions array in IG Stories
             const storyMatch = jsonStr.match(/"video_versions"\s*:\s*\[\s*\{[^}]*"url"\s*:\s*"([^"]+)"/i);
             if (storyMatch && storyMatch[1]) {
               let storyUrl = storyMatch[1].replace(/\\/g, '');
@@ -178,7 +170,6 @@
               }
             }
 
-            // General mp4 regex search
             const match = jsonStr.match(/https?:\\?\/\\?\/[^\s"']+(\.mp4|\/v\/t51|\/v\/t64)[^\s"']*/i);
             if (match && match[0]) {
               let cleanUrl = match[0].replace(/\\/g, '');
@@ -196,7 +187,7 @@
     return null;
   }
 
-  // Extract recent video MP4 URL from Performance network resource logs (Prioritizes video streams, skips audio)
+  // Extract recent video MP4 URL from Performance network resource logs
   function getNetworkVideoUrl() {
     try {
       const entries = performance.getEntriesByType('resource');
@@ -208,7 +199,6 @@
 
         if ((name.includes('.mp4') || name.includes('/v/t51.') || name.includes('/v/t64.')) && (name.includes('cdninstagram.com') || name.includes('fbcdn.net') || name.includes('twimg.com'))) {
           const clean = cleanVideoUrl(name);
-          // If URL explicitly contains video indicator, return immediately
           if (name.includes('dash_video') || name.includes('mime=video') || name.includes('_v.mp4')) {
             return clean;
           }
@@ -310,13 +300,11 @@
     return rawSrc;
   }
 
-  // Video Source Resolver (Prioritizes complete video stream over audio tracks)
+  // Video Source Resolver
   function getVideoUrl(videoElement) {
-    // 1. Extract original MP4 URL from React Fiber props (Highest Priority for IG Stories)
     const reactUrl = getUrlFromReactFiber(videoElement);
     if (reactUrl && !isAudioOnlyUrl(reactUrl)) return reactUrl;
 
-    // 2. Direct src if not blob and not audio-only
     if (videoElement.src && !videoElement.src.startsWith('blob:') && !isAudioOnlyUrl(videoElement.src)) {
       return cleanVideoUrl(videoElement.src);
     }
@@ -324,7 +312,6 @@
       return cleanVideoUrl(videoElement.currentSrc);
     }
 
-    // 3. Check <source> tags
     const sources = videoElement.querySelectorAll('source');
     for (const source of sources) {
       if (source.src && !source.src.startsWith('blob:') && !isAudioOnlyUrl(source.src)) {
@@ -332,7 +319,6 @@
       }
     }
 
-    // 4. Fallback to Performance resource entries for MP4 (excluding audio-only)
     const networkUrl = getNetworkVideoUrl();
     if (networkUrl) return networkUrl;
 
@@ -396,7 +382,7 @@
       btn.setAttribute('data-tooltip', '下載中...');
       const ext = type === 'video' ? 'mp4' : 'jpg';
 
-      // Try Chrome Extension messaging with fallback to direct anchor download
+      // Try Chrome Extension messaging with silent same-tab fallback (NO NEW TAB!)
       try {
         if (!chrome || !chrome.runtime || !chrome.runtime.sendMessage) {
           throw new Error('Chrome extension runtime disconnected.');
@@ -414,8 +400,8 @@
             btn.classList.remove('tmd-loading');
 
             if (chrome.runtime.lastError || (response && !response.success)) {
-              console.warn('[Social Media Downloader] Message response error, triggering direct fallback:', chrome.runtime.lastError || response?.error);
-              triggerDirectDownloadFallback(mediaUrl, type, ext, btn);
+              console.warn('[Social Media Downloader] Message response error, triggering silent fallback:', chrome.runtime.lastError || response?.error);
+              triggerSilentDirectDownload(mediaUrl, type, ext, btn);
             } else {
               btn.classList.add('tmd-success');
               btn.innerHTML = SVG_CHECK;
@@ -430,8 +416,8 @@
           }
         );
       } catch (err) {
-        console.warn('[Social Media Downloader] Extension disconnected error, triggering direct download fallback:', err);
-        triggerDirectDownloadFallback(mediaUrl, type, ext, btn);
+        console.warn('[Social Media Downloader] Extension disconnected error, triggering silent download fallback:', err);
+        triggerSilentDirectDownload(mediaUrl, type, ext, btn);
       }
     });
 
@@ -440,21 +426,32 @@
     return btn;
   }
 
-  // Direct download fallback helper
-  function triggerDirectDownloadFallback(mediaUrl, type, ext, btn) {
+  // Silent Direct Download Helper (No new tab, no window popup!)
+  async function triggerSilentDirectDownload(mediaUrl, type, ext, btn) {
     btn.classList.remove('tmd-loading');
 
-    const a = document.createElement('a');
-    a.href = mediaUrl;
-    a.download = `Social_${type}_${Date.now()}.${ext}`;
-    a.target = '_blank';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    try {
+      // Fetch blob in content script for same-origin Blob URL download (NO _blank target!)
+      const res = await fetch(mediaUrl);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `Social_${type}_${Date.now()}.${ext}`;
+      // NO target="_blank" to ensure ZERO new tab opening!
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
+    } catch (e) {
+      console.warn('[Social Media Downloader] Silent blob fallback error:', e);
+    }
 
     btn.classList.add('tmd-success');
     btn.innerHTML = SVG_CHECK;
-    btn.setAttribute('data-tooltip', '已開啟下載！');
+    btn.setAttribute('data-tooltip', '已開始下載！');
 
     setTimeout(() => {
       btn.classList.remove('tmd-success');
