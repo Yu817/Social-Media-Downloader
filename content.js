@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.2.4 Top-Window & Video-Track Only Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.2.5 Disconnect-Proof Fallback Version)
 
 (function () {
   'use strict';
@@ -19,26 +19,31 @@
 
   let isExtensionEnabled = true;
 
-  // Load initial settings
-  chrome.storage.local.get(['extensionEnabled'], (data) => {
-    if (data.extensionEnabled === false) {
-      isExtensionEnabled = false;
-      hideFloatingButton();
-    }
-  });
+  // Load initial settings with fallback
+  try {
+    if (chrome && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get(['extensionEnabled'], (data) => {
+        if (data && data.extensionEnabled === false) {
+          isExtensionEnabled = false;
+          hideFloatingButton();
+        }
+      });
 
-  // Listen for setting changes from Popup
-  chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'local' && changes.extensionEnabled) {
-      isExtensionEnabled = changes.extensionEnabled.newValue !== false;
-      if (!isExtensionEnabled) {
-        hideFloatingButton();
-      }
+      chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName === 'local' && changes.extensionEnabled) {
+          isExtensionEnabled = changes.extensionEnabled.newValue !== false;
+          if (!isExtensionEnabled) {
+            hideFloatingButton();
+          }
+        }
+      });
     }
-  });
+  } catch (e) {
+    console.warn('[Social Media Downloader] Storage initialization skipped:', e);
+  }
 
   console.log(
-    '%c[Social Media Downloader v1.2.4] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.2.5] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -125,7 +130,6 @@
       const entries = performance.getEntriesByType('resource');
       for (let i = entries.length - 1; i >= 0; i--) {
         const name = entries[i].name;
-        // Exclude audio-only tracks
         if (isAudioOnlyUrl(name)) continue;
 
         if ((name.includes('.mp4') || name.includes('/v/t51.') || name.includes('/v/t64.')) && (name.includes('cdninstagram.com') || name.includes('fbcdn.net') || name.includes('twimg.com'))) {
@@ -331,42 +335,71 @@
       btn.setAttribute('data-tooltip', '下載中...');
       const ext = type === 'video' ? 'mp4' : 'jpg';
 
-      chrome.runtime.sendMessage(
-        {
-          action: 'download',
-          url: mediaUrl,
-          type: type,
-          ext: ext,
-          site: isTwitter ? 'Twitter' : isInstagram ? 'Instagram' : isThreads ? 'Threads' : isFacebook ? 'Facebook' : isPinterest ? 'Pinterest' : 'Social'
-        },
-        (response) => {
-          btn.classList.remove('tmd-loading');
-
-          if (chrome.runtime.lastError || (response && !response.success)) {
-            console.error('[Social Media Downloader] Download Error:', chrome.runtime.lastError || response?.error);
-            btn.innerHTML = SVG_DOWNLOAD;
-            btn.setAttribute('data-tooltip', '下載失敗');
-            setTimeout(() => {
-              btn.setAttribute('data-tooltip', type === 'video' ? '下載影片' : '下載圖片');
-            }, 2000);
-          } else {
-            btn.classList.add('tmd-success');
-            btn.innerHTML = SVG_CHECK;
-            btn.setAttribute('data-tooltip', '已開始下載！');
-
-            setTimeout(() => {
-              btn.classList.remove('tmd-success');
-              btn.innerHTML = SVG_DOWNLOAD;
-              btn.setAttribute('data-tooltip', type === 'video' ? '下載影片' : '下載圖片');
-            }, 2500);
-          }
+      // Try Chrome Extension messaging with fallback to direct anchor download
+      try {
+        if (!chrome || !chrome.runtime || !chrome.runtime.sendMessage) {
+          throw new Error('Chrome extension runtime disconnected.');
         }
-      );
+
+        chrome.runtime.sendMessage(
+          {
+            action: 'download',
+            url: mediaUrl,
+            type: type,
+            ext: ext,
+            site: isTwitter ? 'Twitter' : isInstagram ? 'Instagram' : isThreads ? 'Threads' : isFacebook ? 'Facebook' : isPinterest ? 'Pinterest' : 'Social'
+          },
+          (response) => {
+            btn.classList.remove('tmd-loading');
+
+            if (chrome.runtime.lastError || (response && !response.success)) {
+              console.warn('[Social Media Downloader] Message response error, triggering direct fallback:', chrome.runtime.lastError || response?.error);
+              triggerDirectDownloadFallback(mediaUrl, type, ext, btn);
+            } else {
+              btn.classList.add('tmd-success');
+              btn.innerHTML = SVG_CHECK;
+              btn.setAttribute('data-tooltip', '已開始下載！');
+
+              setTimeout(() => {
+                btn.classList.remove('tmd-success');
+                btn.innerHTML = SVG_DOWNLOAD;
+                btn.setAttribute('data-tooltip', type === 'video' ? '下載影片' : '下載圖片');
+              }, 2500);
+            }
+          }
+        );
+      } catch (err) {
+        console.warn('[Social Media Downloader] Extension disconnected error, triggering direct download fallback:', err);
+        triggerDirectDownloadFallback(mediaUrl, type, ext, btn);
+      }
     });
 
     document.body.appendChild(btn);
     activeFloatingBtn = btn;
     return btn;
+  }
+
+  // Direct download fallback helper
+  function triggerDirectDownloadFallback(mediaUrl, type, ext, btn) {
+    btn.classList.remove('tmd-loading');
+
+    const a = document.createElement('a');
+    a.href = mediaUrl;
+    a.download = `Social_${type}_${Date.now()}.${ext}`;
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    btn.classList.add('tmd-success');
+    btn.innerHTML = SVG_CHECK;
+    btn.setAttribute('data-tooltip', '已開啟下載！');
+
+    setTimeout(() => {
+      btn.classList.remove('tmd-success');
+      btn.innerHTML = SVG_DOWNLOAD;
+      btn.setAttribute('data-tooltip', type === 'video' ? '下載影片' : '下載圖片');
+    }, 2500);
   }
 
   // Update floating button position
