@@ -298,6 +298,70 @@
     return null;
   }
 
+  // Scan window.__additionalData and Redux stores for story video URL
+  // storyId: when provided, only return a URL for that specific story item
+  function scanWindowForStoryVideoUrl(storyId) {
+    try {
+      const ad = window.__additionalData;
+      if (ad) {
+        const url = deepFindVideoUrl(ad, new WeakSet(), 0, storyId);
+        if (url) return url;
+      }
+    } catch (e) {}
+
+    try {
+      const storeKeys = ['__reduxStore', '__reactStore', '__store'];
+      for (const k of storeKeys) {
+        if (window[k] && typeof window[k].getState === 'function') {
+          const state = window[k].getState();
+          const url = deepFindVideoUrl(state, new WeakSet(), 0, storyId);
+          if (url) return url;
+        }
+      }
+    } catch (e) {}
+
+    return null;
+  }
+
+  // Deep-scan any object tree for IG video_versions URLs
+  // storyId: when provided, only return a URL from an item whose pk/id matches
+  function deepFindVideoUrl(obj, visited, depth = 0, storyId = null) {
+    if (!obj || depth > 8 || typeof obj !== 'object') return null;
+    if (visited.has(obj)) return null;
+    visited.add(obj);
+
+    if (Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
+      // If storyId provided, check that this object's pk or id matches
+      if (storyId) {
+        const itemPk = String(obj.pk || obj.id || '');
+        if (itemPk && itemPk !== String(storyId)) {
+          // pk exists but doesn't match — skip this item
+          return null;
+        }
+      }
+      const sorted = [...obj.video_versions].sort((a, b) => (b.width || 0) - (a.width || 0));
+      for (const v of sorted) {
+        if (v && v.url && !isAudioOnlyUrl(v.url)) {
+          return cleanVideoUrl(v.url);
+        }
+      }
+    }
+
+    try {
+      for (const key of Object.keys(obj)) {
+        if (
+          key === 'video_versions' || key === 'items' || key === 'story' ||
+          key === 'media' || key === 'reel' || key === 'reels'
+        ) {
+          const result = deepFindVideoUrl(obj[key], visited, depth + 1, storyId);
+          if (result) return result;
+        }
+      }
+    } catch (e) {}
+
+    return null;
+  }
+
   // Resolve IG username to numeric user_id (needed for reels_media API)
   async function resolveUserId(username) {
     if (!username || username === 'highlights' || username.startsWith('highlight')) return null;
