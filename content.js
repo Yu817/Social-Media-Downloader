@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.4.2 Direct-Hover-Only Engine)
+// Social Media Downloader Content Script - Multi-Platform (v1.5.1 Direct-Hover-Only Engine)
 
 (function () {
   'use strict';
@@ -43,7 +43,7 @@
   }
 
   console.log(
-    '%c[Social Media Downloader v1.4.2] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.5.1] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -116,47 +116,43 @@
     const role = (img.getAttribute('role') || '').toLowerCase();
     const ariaLabel = (img.getAttribute('aria-label') || '').toLowerCase();
 
-    // 1. Role or aria-label signals it's an icon / logo
-    if (role === 'img' && (ariaLabel.includes('profile') || ariaLabel.includes('avatar') || ariaLabel.includes('logo'))) return true;
+    // 1. Role or aria-label signals it's a profile avatar or logo icon
+    if (role === 'img' && (ariaLabel.includes('profile') || ariaLabel.includes('avatar') || ariaLabel.includes('logo') || ariaLabel.includes('頭像') || ariaLabel.includes('大頭貼'))) return true;
 
-    // 2. Inside a <header> tag
-    if (img.closest('header')) return true;
+    // 2. Profile avatars are tiny (24px - 48px circles).
+    // Real post media on Threads/IG/Twitter are almost always >= 50px.
+    const rect = img.getBoundingClientRect();
+    if (rect.width < 50 || rect.height < 50) return true;
 
-    // 3. CDN URL patterns for avatars (Meta/IG/Twitter specific)
+    // 3. CDN URL patterns that are specific to avatars (Meta/IG/Twitter)
     if (
       src.includes('t51.2885-19') || src.includes('t51.36379-19') ||
-      src.includes('s150x150') || src.includes('s320x320') || src.includes('s640x640') ||
       src.includes('/profile_images/') ||
       src.includes('/p100x100/') || src.includes('/p50x50/') || src.includes('/p160x160/') ||
-      src.includes('/75x75_') || src.includes('/150x150/')
+      src.includes('/75x75_')
     ) return true;
 
-    // 4. Alt text keywords (multilingual)
+    // 4. Alt text keywords for avatars
     if (
-      alt.includes('profile') || alt.includes('avatar') || alt.includes('icon') ||
-      alt.includes('頭像') || alt.includes('大頭貼') || alt.includes('写真') ||
-      alt.includes('perfil') || alt.includes('photo de profil')
+      alt.includes('profile photo') || alt.includes('profile picture') ||
+      alt.includes('avatar') || alt.includes('頭像') || alt.includes('大頭貼') ||
+      alt.includes('photo de profil')
     ) return true;
 
-    // 5. Class-based heuristics (IG, Threads, Twitter all use these)
+    // 5. Class-based heuristics for avatars
     if (
       classList.includes('Avatar') || classList.includes('avatar') ||
-      classList.includes('ProfilePhoto') || classList.includes('profile') ||
-      classList.includes('_aadp') // IG avatar class
+      classList.includes('ProfilePhoto') || classList.includes('_aadp')
     ) return true;
 
-    // 6. Strict minimum rendered size: anything smaller than 200x200 in viewport is NOT post content
-    const rect = img.getBoundingClientRect();
-    if (rect.width < 200 || rect.height < 200) return true;
-
-    // 7. If nested inside a small anchor (<200px) that doesn't link to a post/reel
+    // 6. If nested inside a small user-profile anchor (<75px)
     const parentAnchor = img.closest('a');
     if (parentAnchor) {
       const href = (parentAnchor.getAttribute('href') || '').toLowerCase();
-      const isPostLink = href.includes('/p/') || href.includes('/post/') || href.includes('/status/') || href.includes('/reel/') || href.includes('/tv/');
-      if (!isPostLink) {
+      const isPostLink = href.includes('/p/') || href.includes('/post/') || href.includes('/status/') || href.includes('/reel/') || href.includes('/tv/') || href.includes('/t/');
+      if (!isPostLink && (href.startsWith('/@') || href.includes('instagram.com/') || href.includes('twitter.com/'))) {
         const aRect = parentAnchor.getBoundingClientRect();
-        if (aRect.width < 200 || aRect.height < 200) return true;
+        if (aRect.width < 75 && aRect.height < 75) return true;
       }
     }
 
@@ -166,9 +162,9 @@
   // Is the image fully rendered and large enough to be post content?
   function isContentImage(img) {
     if (!img) return false;
-    if (!img.complete || !img.naturalWidth || img.naturalWidth < 200 || !img.naturalHeight || img.naturalHeight < 200) return false;
+    if (!img.complete || !img.naturalWidth || img.naturalWidth < 80 || !img.naturalHeight || img.naturalHeight < 80) return false;
     const rect = img.getBoundingClientRect();
-    return rect.width >= 200 && rect.height >= 200;
+    return rect.width >= 50 && rect.height >= 50;
   }
 
   // Is the video fully loaded with real video dimensions?
@@ -176,10 +172,8 @@
     if (!video) return false;
     const width = video.videoWidth || 0;
     const height = video.videoHeight || 0;
-    // Accept if intrinsic dimensions available, OR if rendered size is large enough
     const rect = video.getBoundingClientRect();
-    if (rect.width < 80 || rect.height < 80) return false;
-    // readyState >= HAVE_METADATA (1) means video loaded
+    if (rect.width < 50 || rect.height < 50) return false;
     if (video.readyState < 1 && width === 0) return false;
     return true;
   }
@@ -312,6 +306,114 @@
     return null;
   }
 
+  function collectReactVideoRecords(obj, records, depth = 0, visited = new WeakSet()) {
+    if (!obj || depth > 8 || typeof obj !== 'object') return;
+    if (visited.has(obj)) return;
+    visited.add(obj);
+
+    try {
+      if (Array.isArray(obj.video_versions) || obj.video_url || obj.progressive_url) {
+        const url = obj.progressive_url && !isAudioOnlyUrl(obj.progressive_url)
+          ? cleanVideoUrl(obj.progressive_url)
+          : getInstagramVideoUrl(obj);
+        if (url) {
+          const versions = Array.isArray(obj.video_versions) ? [...obj.video_versions] : [];
+          versions.sort((a, b) => (b.width || 0) - (a.width || 0));
+          const version = versions.find(item => item?.url && !isAudioOnlyUrl(item.url));
+          records.push({
+            url,
+            duration: getInstagramItemDuration(obj),
+            width: Number(obj.original_width ?? obj.width ?? version?.width) || null,
+            height: Number(obj.original_height ?? obj.height ?? version?.height) || null
+          });
+        }
+      }
+
+      if (obj.memoizedState && typeof obj.memoizedState === 'object') {
+        collectReactVideoRecords(obj.memoizedState, records, depth + 1, visited);
+      }
+      if (obj.next && typeof obj.next === 'object') {
+        collectReactVideoRecords(obj.next, records, depth + 1, visited);
+      }
+      if (obj.item && typeof obj.item === 'object') {
+        collectReactVideoRecords(obj.item, records, depth + 1, visited);
+      }
+      if (obj.media && typeof obj.media === 'object') {
+        collectReactVideoRecords(obj.media, records, depth + 1, visited);
+      }
+      if (obj.story && typeof obj.story === 'object') {
+        collectReactVideoRecords(obj.story, records, depth + 1, visited);
+      }
+
+      for (const key of Object.keys(obj)) {
+        if (
+          key === 'children' || key.includes('video') || key.includes('story') ||
+          key.includes('item') || key.includes('media') || key.includes('Reel') ||
+          key === 'memoizedProps' || key === 'pendingProps' || key === 'stateNode'
+        ) {
+          const value = obj[key];
+          if (value && typeof value === 'object') {
+            collectReactVideoRecords(value, records, depth + 1, visited);
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Return a Fiber URL only when the current DOM video has a unique metadata
+  // match. This avoids taking the first preloaded highlight item.
+  function getReactVideoUrlByMetadata(videoElement) {
+    if (!videoElement) return null;
+
+    const records = [];
+    const visited = new WeakSet();
+    let curr = videoElement;
+    let domDepth = 0;
+
+    while (curr && domDepth < 4 && curr !== document.body) {
+      for (const key in curr) {
+        if (!key.startsWith('__reactFiber$') && !key.startsWith('__reactInternalInstance$') && !key.startsWith('__reactProps$')) continue;
+
+        let fiber = curr[key];
+        let fiberDepth = 0;
+        while (fiber && fiberDepth < 12) {
+          const props = fiber.memoizedProps || fiber.pendingProps;
+          if (props) collectReactVideoRecords(props, records, 0, visited);
+
+          if (fiber.stateNode && typeof fiber.stateNode === 'object') {
+            const stateProps = fiber.stateNode.props || fiber.stateNode.state;
+            if (stateProps) collectReactVideoRecords(stateProps, records, 0, visited);
+          }
+
+          fiber = fiber.return;
+          fiberDepth++;
+        }
+      }
+      curr = curr.parentElement;
+      domDepth++;
+    }
+
+    const uniqueRecords = [...new Map(records.map(record => [record.url, record])).values()];
+    const currentDuration = Number(videoElement.duration);
+    if (Number.isFinite(currentDuration) && currentDuration > 0) {
+      const durationMatches = uniqueRecords.filter(record =>
+        record.duration !== null && Math.abs(record.duration - currentDuration) < 0.75
+      );
+      if (durationMatches.length === 1) return durationMatches[0].url;
+    }
+
+    const currentWidth = Number(videoElement.videoWidth);
+    const currentHeight = Number(videoElement.videoHeight);
+    if (currentWidth > 0 && currentHeight > 0) {
+      const dimensionMatches = uniqueRecords.filter(record =>
+        record.width === currentWidth && record.height === currentHeight
+      );
+      if (dimensionMatches.length === 1) return dimensionMatches[0].url;
+    }
+
+    return null;
+  }
+
   // Scan window.__additionalData and Redux stores for story video URL
   // storyId: when provided, only return a URL for that specific story item
   function scanWindowForStoryVideoUrl(storyId) {
@@ -398,30 +500,103 @@
     return null;
   }
 
-  // Get active slide index for stories & highlights from top progress bar segments
-  function getActiveStoryIndex() {
+  function getStoryProgressRatio(segment) {
+    const nodes = [segment, ...segment.querySelectorAll('*')];
+    const ratios = [];
+
+    for (const node of nodes) {
+      const ariaValue = Number(node.getAttribute?.('aria-valuenow'));
+      const ariaMax = Number(node.getAttribute?.('aria-valuemax'));
+      if (Number.isFinite(ariaValue) && Number.isFinite(ariaMax) && ariaMax > 0) {
+        ratios.push(Math.max(0, Math.min(1, ariaValue / ariaMax)));
+      }
+
+      const inlineTransform = String(node.style?.transform || '');
+      const computedTransform = String(window.getComputedStyle?.(node)?.transform || '');
+      const transform = inlineTransform || computedTransform;
+      const scaleMatch = transform.match(/scalex\(\s*([0-9.]+)\s*\)/i);
+      const matrixMatch = transform.match(/^matrix\(\s*([0-9.]+)/i);
+      const scale = Number(scaleMatch?.[1] ?? matrixMatch?.[1]);
+      if (Number.isFinite(scale) && scale >= 0 && scale <= 1) ratios.push(scale);
+
+      const widthMatch = String(node.style?.width || '').match(/^([0-9.]+)%$/);
+      if (widthMatch) {
+        const widthRatio = Number(widthMatch[1]) / 100;
+        if (widthRatio >= 0 && widthRatio <= 1) ratios.push(widthRatio);
+      }
+    }
+
+    if (ratios.length === 0) return null;
+    return Math.min(...ratios);
+  }
+
+  function getStoryIndexFromSegments(segments) {
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i];
+      if (
+        segment.getAttribute('aria-current') === 'true' ||
+        segment.getAttribute('aria-selected') === 'true' ||
+        segment.dataset?.active === 'true'
+      ) {
+        return i;
+      }
+    }
+
+    const ratios = segments.map(getStoryProgressRatio);
+    const partialIndex = ratios.findIndex(ratio => ratio !== null && ratio > 0.01 && ratio < 0.99);
+    if (partialIndex >= 0) return partialIndex;
+
+    // Between animation frames the active segment can still be at zero.
+    // The first empty segment after completed segments is then the current one.
+    let completedCount = 0;
+    while (completedCount < ratios.length && ratios[completedCount] !== null && ratios[completedCount] >= 0.99) {
+      completedCount++;
+    }
+    if (completedCount < ratios.length && ratios.slice(completedCount).some(ratio => ratio !== null)) {
+      return completedCount;
+    }
+
+    return -1;
+  }
+
+  // Get active slide index for stories & highlights from the visible top
+  // progress segments. Instagram changes class names frequently, so use
+  // geometry, ARIA state and computed progress instead of class names alone.
+  function getActiveStoryIndex(mediaElement = null, totalItems = 0) {
     try {
-      const storyOverlay = document.querySelector('section, div[role="dialog"], [role="presentation"]');
-      if (!storyOverlay) return -1;
+      const mediaRect = mediaElement?.getBoundingClientRect?.();
+      const selectors = 'div._ac3r, div._aa67, [role="tablist"], [role="progressbar"]';
+      const explicitContainers = [...document.querySelectorAll(selectors)];
+      const geometricContainers = totalItems > 1
+        ? [...document.querySelectorAll('div')].filter(container => {
+            if (container.children.length !== totalItems) return false;
+            const rect = container.getBoundingClientRect();
+            if (rect.width < 100 || rect.height <= 0 || rect.height > 32) return false;
+            if (!mediaRect) return true;
+            return rect.bottom >= mediaRect.top - 80 && rect.top <= mediaRect.top + 120 &&
+              rect.left < mediaRect.right && rect.right > mediaRect.left;
+          })
+        : [];
 
-      const barContainers = storyOverlay.querySelectorAll('div._ac3r, div._aa67, header > div');
-      for (const container of barContainers) {
-        const bars = container.children;
-        if (bars && bars.length > 0) {
-          for (let i = 0; i < bars.length; i++) {
-            const bar = bars[i];
-            const inner = bar.querySelector('div') || bar;
-            const style = (inner.getAttribute('style') || '').toLowerCase();
-            const width = inner.style.width || '';
+      const seen = new Set();
+      for (const container of [...explicitContainers, ...geometricContainers]) {
+        if (seen.has(container)) continue;
+        seen.add(container);
 
-            if (style.includes('scalex') && !style.includes('scalex(0)') && !style.includes('scalex(1)')) {
-              return i;
-            }
-            if (width && width !== '0%' && width !== '0px' && width !== '100%') {
-              return i;
-            }
+        if (container.getAttribute?.('role') === 'progressbar') {
+          const progressBars = [...document.querySelectorAll('[role="progressbar"]')];
+          if (totalItems > 1 && progressBars.length === totalItems) {
+            const index = getStoryIndexFromSegments(progressBars);
+            if (index >= 0) return index;
           }
+          continue;
         }
+
+        const bars = [...container.children];
+        if (bars.length < 2) continue;
+        if (totalItems > 1 && bars.length !== totalItems) continue;
+        const index = getStoryIndexFromSegments(bars);
+        if (index >= 0) return index;
       }
     } catch (e) {}
     return -1;
@@ -429,11 +604,12 @@
 
   // Fetch the current IG story or highlight item via the API v1 endpoint (uses session cookie)
   // Handles both regular user stories (numeric user_id) and IG Highlights (highlight:HIGHLIGHT_ID)
-  async function fetchStoryItemFromApi(username, storyId) {
+  async function fetchStoryItemFromApi(username, storyId, mediaElement = null) {
     if (!username && !storyId) return null;
 
+    const isHighlightTarget = username === 'highlights' || (username && username.startsWith('highlight'));
     let targetId;
-    if (username === 'highlights' || (username && username.startsWith('highlight'))) {
+    if (isHighlightTarget) {
       const rawId = storyId || username;
       targetId = rawId.startsWith('highlight:') ? rawId : `highlight:${rawId}`;
       console.log('[Social Media Downloader] Fetching IG Highlight Reel API for:', targetId);
@@ -467,7 +643,24 @@
         const items2 = data?.reel?.items || data?.items;
         if (Array.isArray(items2)) allItems.push(...items2);
 
-        if (allItems.length === 0) continue;
+        const uniqueItems = [];
+        const seenItemKeys = new Set();
+        for (const item of allItems) {
+          const key = String(
+            item?.pk || item?.id || item?.video_versions?.[0]?.url ||
+            item?.image_versions2?.candidates?.[0]?.url || ''
+          );
+          if (key && seenItemKeys.has(key)) continue;
+          if (key) seenItemKeys.add(key);
+          uniqueItems.push(item);
+        }
+        allItems.length = 0;
+        allItems.push(...uniqueItems);
+
+        if (allItems.length === 0) {
+          console.warn('[Social Media Downloader] IG Highlight API returned no items:', targetId);
+          continue;
+        }
 
         // 1. If we have a specific story_id (for normal user stories), find matching item first
         if (storyId && username !== 'highlights') {
@@ -475,27 +668,50 @@
             String(item?.pk) === String(storyId) ||
             String(item?.id) === String(storyId)
           );
-          if (exactItem?.video_versions?.length > 0) {
+          const exactUrl = getInstagramMediaUrl(exactItem);
+          if (exactUrl) {
             console.log('[Social Media Downloader] Matched story item by pk/id:', exactItem.pk);
-            return cleanVideoUrl(exactItem.video_versions[0].url);
+            return exactUrl;
           }
         }
 
-        // 2. For Highlights or multi-item reels: match using active progress bar slide index!
-        const activeIdx = getActiveStoryIndex();
+        // 2. For Highlights or multi-item reels: match the current DOM media
+        // first, then use the active progress-bar slide index.
+        const metadataIdx = getInstagramItemIndexByMetadata(mediaElement, allItems);
+        const domIdx = getInstagramCarouselIndex(mediaElement, allItems.length);
+        const progressIdx = getActiveStoryIndex(mediaElement, allItems.length);
+        const activeIdx = metadataIdx >= 0 ? metadataIdx : domIdx >= 0 ? domIdx : progressIdx;
         if (activeIdx >= 0 && activeIdx < allItems.length) {
           const activeItem = allItems[activeIdx];
-          if (activeItem?.video_versions?.length > 0) {
+          const activeUrl = getInstagramMediaUrl(activeItem);
+          if (activeUrl) {
             console.log('[Social Media Downloader] Matched highlight story item by active slide index:', activeIdx);
-            return cleanVideoUrl(activeItem.video_versions[0].url);
+            return activeUrl;
           }
         }
 
-        // 3. Fallback: return first item with valid video_versions
-        for (const item of allItems) {
-          if (item?.video_versions?.length > 0) {
-            return cleanVideoUrl(item.video_versions[0].url);
+        console.warn('[Social Media Downloader] IG Highlight item index unavailable, using fallback item matching:', {
+          itemCount: allItems.length,
+          metadataIdx,
+          domIdx,
+          progressIdx
+        });
+
+        // 3. Fallback: If mediaElement itself has a direct URL (for non-blob elements)
+        if (mediaElement) {
+          if (mediaElement.tagName === 'VIDEO') {
+            const directVideo = getDirectVideoUrl(mediaElement);
+            if (directVideo) return directVideo;
+          } else if (mediaElement.tagName === 'IMG') {
+            const directImg = getHighResImageUrl(mediaElement);
+            if (directImg) return directImg;
           }
+        }
+
+        // 4. Fallback across all items in Highlight: find first matching item or item 0
+        for (const item of allItems) {
+          const fallbackUrl = getInstagramMediaUrl(item);
+          if (fallbackUrl) return fallbackUrl;
         }
       } catch (e) {
         console.warn('[Social Media Downloader] IG Story/Highlight API endpoint failed:', url, e);
@@ -504,18 +720,281 @@
     return null;
   }
 
+  function getDirectVideoUrl(videoElement) {
+    if (!videoElement) return null;
+
+    const candidates = [videoElement.currentSrc, videoElement.src];
+    const sources = videoElement.querySelectorAll ? videoElement.querySelectorAll('source') : [];
+    for (const source of sources) candidates.push(source.src);
+
+    for (const candidate of candidates) {
+      if (candidate && !candidate.startsWith('blob:') && !isAudioOnlyUrl(candidate)) {
+        return cleanVideoUrl(candidate);
+      }
+    }
+    return null;
+  }
+
+  function parseCarouselIndex(value, totalItems) {
+    if (!value) return -1;
+    const match = String(value).match(/(?:slide|image|photo|media|item)?\s*(\d+)\s*(?:of|\/)\s*(\d+)/i);
+    if (!match || Number(match[2]) !== totalItems) return -1;
+    const index = Number(match[1]) - 1;
+    return index >= 0 && index < totalItems ? index : -1;
+  }
+
+  // Try to map the clicked DOM media to the corresponding Instagram API item.
+  // Never guess item 0 for a carousel: that is what caused mixed photo/video
+  // posts to download the first slide.
+  function getInstagramCarouselIndex(mediaElement, totalItems) {
+    if (!mediaElement || totalItems <= 1) return totalItems === 1 ? 0 : -1;
+
+    let node = mediaElement;
+    let depth = 0;
+    while (node && depth < 8) {
+      const values = [
+        node.getAttribute?.('aria-label'),
+        node.getAttribute?.('data-slide-index'),
+        node.getAttribute?.('data-carousel-index'),
+        node.getAttribute?.('data-index'),
+        node.getAttribute?.('aria-posinset')
+      ];
+
+      for (const value of values) {
+        const pairIndex = parseCarouselIndex(value, totalItems);
+        if (pairIndex >= 0) return pairIndex;
+      }
+
+      const slideIndexValue = node.getAttribute?.('data-slide-index');
+      const numericIndex = slideIndexValue === null || slideIndexValue === '' ? NaN : Number(slideIndexValue);
+      if (Number.isInteger(numericIndex) && numericIndex >= 0 && numericIndex < totalItems) {
+        return numericIndex;
+      }
+
+      const positionValue = node.getAttribute?.('aria-posinset');
+      const role = node.getAttribute?.('role');
+      const isSlideNode = role === 'group' || role === 'tabpanel' || role === 'tab' ||
+        node.hasAttribute?.('aria-roledescription');
+      const position = positionValue === null || positionValue === '' ? NaN : Number(positionValue);
+      if (isSlideNode && Number.isInteger(position) && position > 0 && position <= totalItems) {
+        return position - 1;
+      }
+
+      node = node.parentElement;
+      depth++;
+    }
+
+    const article = mediaElement.closest?.('article');
+    if (!article) return -1;
+
+    const activeTab = article.querySelector('[role="tab"][aria-selected="true"], [role="tab"][aria-current="true"]');
+    if (activeTab) {
+      const tabs = [...article.querySelectorAll('[role="tab"]')];
+      const tabIndex = tabs.indexOf(activeTab);
+      if (tabs.length === totalItems && tabIndex >= 0) return tabIndex;
+    }
+
+    const mediaElements = [...article.querySelectorAll('img, video')].filter((element) => {
+      if (element.tagName === 'IMG') return !isAvatarOrIcon(element) && isContentImage(element);
+      return isContentVideo(element);
+    });
+    const mediaIndex = mediaElements.indexOf(mediaElement);
+    if (mediaElements.length === totalItems && mediaIndex >= 0) return mediaIndex;
+
+    return -1;
+  }
+
+  function isLikelyInstagramCarousel(mediaElement) {
+    const article = mediaElement?.closest?.('article');
+    if (!article) return false;
+    if (article.querySelector('[aria-roledescription="carousel"], [role="tablist"]')) return true;
+
+    const labels = [...article.querySelectorAll('[aria-label]')]
+      .map(element => (element.getAttribute('aria-label') || '').toLowerCase());
+    return labels.some(label =>
+      label.includes('next') || label.includes('previous') ||
+      label.includes('go to slide') || label.includes('carousel') ||
+      label.includes('下一張') || label.includes('上一張')
+    );
+  }
+
+  function getInstagramVideoUrl(item) {
+    if (!item) return null;
+    if (item.video_url && !isAudioOnlyUrl(item.video_url)) return cleanVideoUrl(item.video_url);
+
+    const versions = Array.isArray(item.video_versions) ? [...item.video_versions] : [];
+    versions.sort((a, b) => (b.width || 0) - (a.width || 0));
+    for (const version of versions) {
+      if (version?.url && !isAudioOnlyUrl(version.url)) return cleanVideoUrl(version.url);
+    }
+    return null;
+  }
+
+  function getInstagramMediaUrl(item, type = null) {
+    if (!item) return null;
+    if ((!type || type === 'video') && Array.isArray(item.video_versions) && item.video_versions.length > 0) {
+      const videoUrl = getInstagramVideoUrl(item);
+      if (videoUrl) return videoUrl;
+    }
+    if (item.display_url) return item.display_url;
+    if (Array.isArray(item.image_versions2?.candidates) && item.image_versions2.candidates.length > 0) {
+      const candidates = [...item.image_versions2.candidates].sort((a, b) => (b.width || 0) - (a.width || 0));
+      for (const cand of candidates) {
+        if (cand?.url) return cand.url;
+      }
+    }
+    if (item.image_url) return item.image_url;
+    return getInstagramVideoUrl(item);
+  }
+
+  function getInstagramItemDuration(item) {
+    const value = item?.video_duration ?? item?.videoDuration ?? item?.duration ?? item?.video_versions?.[0]?.duration;
+    const duration = Number(value);
+    return Number.isFinite(duration) && duration > 0 ? duration : null;
+  }
+
+  function getInstagramItemDimensions(item) {
+    const version = item?.video_versions?.[0];
+    const width = Number(item?.original_width ?? item?.width ?? version?.width);
+    const height = Number(item?.original_height ?? item?.height ?? version?.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+    return { width, height };
+  }
+
+  function getComparableInstagramMediaPath(url) {
+    if (!url || String(url).startsWith('blob:') || String(url).startsWith('data:')) return null;
+    try {
+      return decodeURIComponent(new URL(url, window.location.href).pathname)
+        .replace(/\/+$/, '')
+        .toLowerCase();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function getInstagramItemMediaPaths(item) {
+    if (!item || typeof item !== 'object') return [];
+    const urls = [
+      item.video_url,
+      item.thumbnail_url,
+      item.display_url,
+      item.image_url,
+      ...(Array.isArray(item.video_versions) ? item.video_versions.map(version => version?.url) : []),
+      ...(Array.isArray(item.image_versions2?.candidates)
+        ? item.image_versions2.candidates.map(candidate => candidate?.url)
+        : [])
+    ];
+    return [...new Set(urls.map(getComparableInstagramMediaPath).filter(Boolean))];
+  }
+
+  function getDomMediaIdentityPaths(mediaElement) {
+    if (!mediaElement) return [];
+    const urls = [
+      mediaElement.currentSrc,
+      mediaElement.src,
+      mediaElement.poster,
+      mediaElement.getAttribute?.('src'),
+      mediaElement.getAttribute?.('poster')
+    ];
+
+    const srcset = mediaElement.getAttribute?.('srcset');
+    if (srcset) {
+      const candidates = srcset.split(',').map(item => item.trim().split(/\s+/)[0]);
+      urls.push(...candidates);
+    }
+
+    for (const source of mediaElement.querySelectorAll?.('source') || []) {
+      urls.push(source.currentSrc, source.src);
+    }
+
+    // Instagram often renders the video's poster or story photo as an overlapping <img>.
+    const mediaRect = mediaElement.getBoundingClientRect?.();
+    let container = mediaElement.parentElement;
+    for (let depth = 0; container && depth < 3; depth++, container = container.parentElement) {
+      for (const image of container.querySelectorAll?.('img') || []) {
+        urls.push(image.currentSrc, image.src, image.getAttribute('src'));
+        const imgSrcset = image.getAttribute?.('srcset');
+        if (imgSrcset) {
+          const candidates = imgSrcset.split(',').map(item => item.trim().split(/\s+/)[0]);
+          urls.push(...candidates);
+        }
+      }
+    }
+
+    return [...new Set(urls.map(getComparableInstagramMediaPath).filter(Boolean))];
+  }
+
+  function getInstagramItemIndexByMetadata(mediaElement, items) {
+    if (!mediaElement || !Array.isArray(items)) return -1;
+
+    const domPaths = getDomMediaIdentityPaths(mediaElement);
+    if (domPaths.length > 0) {
+      const pathMatches = items
+        .map((item, index) => ({ index, paths: getInstagramItemMediaPaths(item) }))
+        .filter(entry => entry.paths.some(path => domPaths.includes(path)));
+      if (pathMatches.length === 1) return pathMatches[0].index;
+
+      // Some CDN variants change the host/query but preserve a unique filename.
+      const domNames = domPaths.map(path => path.split('/').pop()).filter(Boolean);
+      const filenameMatches = items
+        .map((item, index) => ({ index, paths: getInstagramItemMediaPaths(item) }))
+        .filter(entry => entry.paths.some(path => domNames.includes(path.split('/').pop())));
+      if (filenameMatches.length === 1) return filenameMatches[0].index;
+    }
+
+    if (mediaElement.tagName === 'VIDEO') {
+      const currentDuration = Number(mediaElement.duration);
+      if (Number.isFinite(currentDuration) && currentDuration > 0) {
+        const durationMatches = items
+          .map((item, index) => ({ index, duration: getInstagramItemDuration(item) }))
+          .filter(entry => entry.duration !== null && Math.abs(entry.duration - currentDuration) < 0.75);
+        if (durationMatches.length === 1) return durationMatches[0].index;
+      }
+
+      const currentWidth = Number(mediaElement.videoWidth);
+      const currentHeight = Number(mediaElement.videoHeight);
+      if (currentWidth > 0 && currentHeight > 0) {
+        const dimensionMatches = items
+          .map((item, index) => ({ index, dimensions: getInstagramItemDimensions(item) }))
+          .filter(entry => entry.dimensions &&
+            entry.dimensions.width === currentWidth && entry.dimensions.height === currentHeight);
+        if (dimensionMatches.length === 1) return dimensionMatches[0].index;
+      }
+    }
+
+    return -1;
+  }
+
+  function getInstagramMediaItems(data) {
+    const root = data?.graphql?.shortcode_media || data?.items?.[0];
+    if (!root) return [];
+    if (Array.isArray(root.carousel_media)) return root.carousel_media;
+
+    const edges = root.edge_sidecar_to_children?.edges;
+    if (Array.isArray(edges) && edges.length > 0) {
+      return edges.map(edge => edge?.node).filter(Boolean);
+    }
+    return [root];
+  }
+
   // Fetch Instagram post/reel progressive MP4 via Info API
-  async function fetchInstagramProgressiveVideo(shortcode) {
+  async function fetchInstagramProgressiveVideo(shortcode, mediaElement = null) {
     if (!shortcode) return null;
     try {
       const apiUrl = `https://www.instagram.com/p/${shortcode}/?__a=1&__d=dis`;
       const res = await fetch(apiUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
       if (res.ok) {
         const data = await res.json();
-        const items = data?.graphql?.shortcode_media || data?.items?.[0];
-        if (items && items.video_versions && items.video_versions.length > 0) {
-          return cleanVideoUrl(items.video_versions[0].url);
-        }
+        const items = getInstagramMediaItems(data);
+        if (items.length === 1) return getInstagramVideoUrl(items[0]);
+
+        const metadataIndex = getInstagramItemIndexByMetadata(mediaElement, items);
+        if (metadataIndex >= 0) return getInstagramVideoUrl(items[metadataIndex]);
+
+        const mediaIndex = getInstagramCarouselIndex(mediaElement, items.length);
+        if (mediaIndex >= 0) return getInstagramVideoUrl(items[mediaIndex]);
+
+        console.warn('[Social Media Downloader] IG carousel index unavailable; refusing to guess the first item.');
       }
     } catch (e) {
       console.warn('[Social Media Downloader] IG info API lookup skipped:', e);
@@ -595,30 +1074,56 @@
     const username = storyMatch ? storyMatch[1] : null;
     const storyId = storyMatch ? storyMatch[2] : null; // The specific story item ID
 
-    console.log('[Social Media Downloader] Resolving story:', { username, storyId });
+    console.log('[Social Media Downloader] Resolving story:', username, storyId);
 
-    // Strategy 1: React fiber scan DIRECTLY on the video element (shallow, max 5 parent levels)
-    // Shallow scan avoids picking up pre-loaded adjacent stories from neighboring fiber nodes
-    const fiberUrl = getUrlFromReactFiberShallow(videoElement);
-    if (fiberUrl && !isAudioOnlyUrl(fiberUrl) && !fiberUrl.startsWith('blob:')) {
-      console.log('[Social Media Downloader] IG Story URL from React fiber (shallow):', fiberUrl);
-      return fiberUrl;
+    const isHighlight = username === 'highlights' || (username && username.startsWith('highlight'));
+
+    // The current video element is the most reliable identity after a story
+    // navigation. Use its own source before inspecting shared React/API data.
+    const directUrl = getDirectVideoUrl(videoElement);
+    if (directUrl) return directUrl;
+
+    const scopedFiberUrl = getReactVideoUrlByMetadata(videoElement);
+    if (scopedFiberUrl) {
+      console.log('[Social Media Downloader] IG Story URL matched to current video metadata.');
+      return scopedFiberUrl;
     }
 
-    // Strategy 2: window.__additionalData scan filtered by storyId
-    const storeUrl = scanWindowForStoryVideoUrl(storyId);
-    if (storeUrl && !isAudioOnlyUrl(storeUrl) && !storeUrl.startsWith('blob:')) {
-      console.log('[Social Media Downloader] IG Story URL from window store:', storeUrl);
-      return storeUrl;
+    // React Fiber can contain multiple preloaded highlight items. Do not use
+    // an unscoped Fiber URL for highlights because it may always return the
+    // first item instead of the currently visible slide.
+    if (!isHighlight) {
+      const fiberUrl = getUrlFromReactFiberShallow(videoElement);
+      if (fiberUrl && !isAudioOnlyUrl(fiberUrl) && !fiberUrl.startsWith('blob:')) {
+        console.log('[Social Media Downloader] IG Story URL from React fiber (shallow):', fiberUrl);
+        return fiberUrl;
+      }
+    }
+
+    // Strategy 2: window.__additionalData scan filtered by storyId.
+    // A highlight URL identifies the collection, not the active item, so its
+    // unscoped store tree can also return the first preloaded video.
+    if (!isHighlight) {
+      const storeUrl = scanWindowForStoryVideoUrl(storyId);
+      if (storeUrl && !isAudioOnlyUrl(storeUrl) && !storeUrl.startsWith('blob:')) {
+        console.log('[Social Media Downloader] IG Story URL from window store:', storeUrl);
+        return storeUrl;
+      }
     }
 
     // Strategy 3: IG API v1 - fetch story reel and match by story_id (item.pk)
     btn.setAttribute('data-tooltip', '從 IG API 取得原聲影片...');
-    const apiUrl = await fetchStoryItemFromApi(username, storyId);
+    const apiUrl = await fetchStoryItemFromApi(username, storyId, videoElement);
     if (apiUrl && !isAudioOnlyUrl(apiUrl)) {
       console.log('[Social Media Downloader] IG Story URL from API (matched story_id):', apiUrl);
       return apiUrl;
     }
+
+    // Metadata may become available while the API request is in flight.
+    const lateDirectUrl = getDirectVideoUrl(videoElement);
+    if (lateDirectUrl) return lateDirectUrl;
+    const lateScopedFiberUrl = getReactVideoUrlByMetadata(videoElement);
+    if (lateScopedFiberUrl) return lateScopedFiberUrl;
 
     // Note: We intentionally do NOT fall back to getNetworkVideoUrl() here.
     // That function scans recent network requests and would return whichever
@@ -649,17 +1154,15 @@
       return null;
     }
 
-    // Case 3: Mouse is on an overlay div — probe through the z-stack
-    // to find media elements whose visible area contains the mouse.
-    if (mouseX && mouseY) {
+    // Case 3: Mouse is on an overlay div/link — probe elements stacked under (mouseX, mouseY)
+    if (Number.isFinite(mouseX) && Number.isFinite(mouseY)) {
       try {
         const stack = document.elementsFromPoint(mouseX, mouseY);
         for (const el of stack) {
-          if (el === target || el.classList.contains('tmd-download-btn')) continue;
+          if (el.classList.contains('tmd-download-btn')) continue;
 
-          // Verify this element's rendered rect actually contains the mouse
           const elRect = el.getBoundingClientRect();
-          if (elRect.width < 80 || elRect.height < 80) continue;
+          if (elRect.width < 50 || elRect.height < 50) continue;
           if (mouseX < elRect.left || mouseX > elRect.right ||
               mouseY < elRect.top || mouseY > elRect.bottom) continue;
 
@@ -668,6 +1171,22 @@
           }
           if (el.tagName === 'IMG' && !isAvatarOrIcon(el) && isContentImage(el)) {
             return { media: el, type: 'image' };
+          }
+
+          // If element is a link or overlay container directly under cursor, check its direct child media
+          const childVid = el.querySelector?.('video');
+          if (childVid && isContentVideo(childVid)) {
+            const vRect = childVid.getBoundingClientRect();
+            if (mouseX >= vRect.left && mouseX <= vRect.right && mouseY >= vRect.top && mouseY <= vRect.bottom) {
+              return { media: childVid, type: 'video' };
+            }
+          }
+          const childImg = el.querySelector?.('img');
+          if (childImg && !isAvatarOrIcon(childImg) && isContentImage(childImg)) {
+            const iRect = childImg.getBoundingClientRect();
+            if (mouseX >= iRect.left && mouseX <= iRect.right && mouseY >= iRect.top && mouseY <= iRect.bottom) {
+              return { media: childImg, type: 'image' };
+            }
           }
         }
       } catch (e) {}
@@ -717,12 +1236,26 @@
 
   // Video Source Resolver (Prioritizes Combined Video+Audio Progressive Stream)
   async function getVideoUrl(videoElement) {
-    // 1. SHALLOW fiber scan only (max 4 DOM parents, 5 fiber levels)
-    // The deep walker would climb to feed-level components holding MULTIPLE posts' data.
-    const reactUrl = getUrlFromReactFiberShallow(videoElement);
-    if (reactUrl && !isAudioOnlyUrl(reactUrl)) return reactUrl;
+    // 1. Prefer the source attached to the exact DOM video element.
+    // React/API data can contain multiple carousel items and is not scoped
+    // reliably enough to run before the element's own source.
+    const directUrl = getDirectVideoUrl(videoElement);
+    if (directUrl) return directUrl;
 
-    // 2. Query Instagram APIs
+    const isCarousel = isLikelyInstagramCarousel(videoElement);
+
+    const scopedFiberUrl = getReactVideoUrlByMetadata(videoElement);
+    if (scopedFiberUrl) return scopedFiberUrl;
+
+    // 2. SHALLOW fiber scan only (max 4 DOM parents, 12 fiber levels).
+    // Skip this for carousels because the shared Fiber tree can contain
+    // several slides and return the first one.
+    if (!isCarousel) {
+      const reactUrl = getUrlFromReactFiberShallow(videoElement);
+      if (reactUrl && !isAudioOnlyUrl(reactUrl)) return reactUrl;
+    }
+
+    // 3. Query Instagram APIs
     if (isInstagram) {
       const pathname = window.location.pathname;
 
@@ -759,28 +1292,17 @@
       }
 
       if (shortcode) {
-        const postVideoUrl = await fetchInstagramProgressiveVideo(shortcode);
+        const postVideoUrl = await fetchInstagramProgressiveVideo(shortcode, videoElement);
         if (postVideoUrl) return postVideoUrl;
       }
+
+      // Do not fall through to a shared Fiber/network URL for a carousel.
+      // If the exact slide cannot be identified, refusing the download is
+      // safer than downloading another slide.
+      if (isCarousel) return null;
     }
 
-    // 3. Direct src if not blob and not audio-only
-    if (videoElement.src && !videoElement.src.startsWith('blob:') && !isAudioOnlyUrl(videoElement.src)) {
-      return cleanVideoUrl(videoElement.src);
-    }
-    if (videoElement.currentSrc && !videoElement.currentSrc.startsWith('blob:') && !isAudioOnlyUrl(videoElement.currentSrc)) {
-      return cleanVideoUrl(videoElement.currentSrc);
-    }
-
-    // 4. Check <source> tags
-    const sources = videoElement.querySelectorAll('source');
-    for (const source of sources) {
-      if (source.src && !source.src.startsWith('blob:') && !isAudioOnlyUrl(source.src)) {
-        return cleanVideoUrl(source.src);
-      }
-    }
-
-    // 5. Fallback to Performance resource entries for MP4
+    // 4. Fallback to Performance resource entries for MP4
     const networkUrl = getNetworkVideoUrl();
     if (networkUrl) return networkUrl;
 
@@ -789,7 +1311,21 @@
 
   // Resolve media URL
   async function resolveMediaUrl(element, type) {
-    let url = type === 'video' ? await getVideoUrl(element) : getHighResImageUrl(element);
+    let url = null;
+    if (type === 'video') {
+      url = await getVideoUrl(element);
+    } else {
+      url = getHighResImageUrl(element);
+      if (isInstagram && window.location.pathname.includes('/stories/')) {
+        const storyMatch = window.location.pathname.match(/\/stories\/([^\/]+)(?:\/(\d+))?/);
+        if (storyMatch) {
+          const username = storyMatch[1];
+          const storyId = storyMatch[2];
+          const apiUrl = await fetchStoryItemFromApi(username, storyId, element);
+          if (apiUrl) url = apiUrl;
+        }
+      }
+    }
     if (!url) return null;
 
     if (url.startsWith('blob:')) {
@@ -822,7 +1358,9 @@
       e.preventDefault();
       e.stopPropagation();
 
-      if (!activeMediaElement || !isExtensionEnabled) return;
+      if (!isExtensionEnabled) return;
+
+      if (!refreshActiveMediaFromButton(btn) || !activeMediaElement.isConnected) return;
 
       btn.classList.add('tmd-loading');
       btn.innerHTML = SVG_LOADING;
@@ -967,37 +1505,109 @@
     const btn = createGlobalFloatingButton();
     const rect = mediaElement.getBoundingClientRect();
 
-    if (rect.width < 60 || rect.height < 60) {
-      btn.style.display = 'none';
+    const isInViewport = rect.bottom > 0 && rect.right > 0 &&
+      rect.left < window.innerWidth && rect.top < window.innerHeight;
+    if (!mediaElement.isConnected || rect.width < 60 || rect.height < 60 || !isInViewport) {
+      hideFloatingButton(true);
       return;
     }
 
     activeMediaElement = mediaElement;
     activeMediaType = type;
 
-    const top = rect.top + 12;
-    const right = rect.right - 50;
+    const top = Math.max(rect.top + 8, Math.min(rect.top + 12, window.innerHeight - 58));
+    const left = Math.max(rect.left + 8, Math.min(rect.right - 48, window.innerWidth - 50));
 
     btn.style.display = 'flex';
     btn.style.position = 'fixed';
-    btn.style.top = `${Math.max(10, top)}px`;
-    btn.style.left = `${right}px`;
+    btn.style.top = `${top}px`;
+    btn.style.left = `${left}px`;
     btn.style.zIndex = '2147483647';
     btn.setAttribute('data-tooltip', type === 'video' ? '下載影片' : '下載圖片');
   }
 
   // Hide floating button
-  function hideFloatingButton() {
-    if (activeFloatingBtn && !activeFloatingBtn.matches(':hover')) {
+  function hideFloatingButton(force = false) {
+    const canHide = force || !activeFloatingBtn?.matches(':hover');
+    if (activeFloatingBtn && canHide) {
       activeFloatingBtn.style.display = 'none';
     }
+    if (canHide) {
+      activeMediaElement = null;
+      activeMediaType = null;
+    }
+  }
+
+  function isVisibleMediaElement(mediaElement) {
+    if (!mediaElement || !mediaElement.isConnected) return false;
+
+    if (typeof mediaElement.checkVisibility === 'function') {
+      try {
+        if (!mediaElement.checkVisibility({
+          checkOpacity: true,
+          checkVisibilityCSS: true
+        })) return false;
+      } catch (e) {}
+    }
+
+    const rect = mediaElement.getBoundingClientRect();
+    if (rect.width < 60 || rect.height < 60 || rect.bottom <= 0 || rect.right <= 0 ||
+        rect.left >= window.innerWidth || rect.top >= window.innerHeight) return false;
+
+    let node = mediaElement;
+    while (node && node !== document.body) {
+      if (node.hidden || node.getAttribute?.('aria-hidden') === 'true') return false;
+      const style = window.getComputedStyle(node);
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+      node = node.parentElement;
+    }
+
+    const centerX = Math.max(0, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
+    const centerY = Math.max(0, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
+    const stack = document.elementsFromPoint?.(centerX, centerY) || [];
+    return stack.some(element =>
+      element === mediaElement ||
+      mediaElement.contains?.(element) ||
+      element.contains?.(mediaElement)
+    );
+  }
+
+  function validateFloatingButtonState() {
+    if (!activeFloatingBtn || activeFloatingBtn.style.display === 'none') return;
+    if (!isVisibleMediaElement(activeMediaElement)) hideFloatingButton(true);
+  }
+
+  // The visible story can change without a mousemove event. Re-detect the
+  // media behind the button immediately before downloading so navigation in
+  // Instagram Highlights cannot leave a stale DOM element selected.
+  function refreshActiveMediaFromButton(btn) {
+    if (!btn || btn.style.display === 'none') return false;
+
+    activeMediaElement = null;
+    activeMediaType = null;
+
+    const rect = btn.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const result = findDirectMediaElement(btn, x, y);
+
+    if (!result || !result.media) return false;
+
+    activeMediaElement = result.media;
+    activeMediaType = result.type;
+    return true;
   }
 
   // =========================================================================
   // MOUSEMOVE: Only show button when mouse is DIRECTLY on a content media element
   // =========================================================================
   let hoverCheckTimer = null;
+  let lastPointerX = NaN;
+  let lastPointerY = NaN;
   document.addEventListener('mousemove', (e) => {
+    lastPointerX = e.clientX;
+    lastPointerY = e.clientY;
+
     if (!isExtensionEnabled) {
       hideFloatingButton();
       return;
@@ -1023,16 +1633,83 @@
     }, 350);
   }, { passive: true });
 
+  // Lazy-loaded Threads media may finish loading while the pointer stays
+  // still. Re-run the same hover check when the actual image/video becomes
+  // ready instead of requiring the user to move the mouse again.
+  function handleMediaReady(e) {
+    const element = e.target;
+    if (!element || (element.tagName !== 'IMG' && element.tagName !== 'VIDEO')) return;
+    if (!Number.isFinite(lastPointerX) || !Number.isFinite(lastPointerY)) return;
+
+    const rect = element.getBoundingClientRect();
+    if (lastPointerX < rect.left || lastPointerX > rect.right ||
+        lastPointerY < rect.top || lastPointerY > rect.bottom) return;
+
+    const result = findDirectMediaElement(element, lastPointerX, lastPointerY);
+    if (result?.media) updateFloatingButtonPosition(result.media, result.type);
+  }
+
+  document.addEventListener('load', handleMediaReady, true);
+  document.addEventListener('loadedmetadata', handleMediaReady, true);
+  document.addEventListener('canplay', handleMediaReady, true);
+
   window.addEventListener('scroll', () => {
     if (isExtensionEnabled && activeMediaElement && activeFloatingBtn && activeFloatingBtn.style.display !== 'none') {
       updateFloatingButtonPosition(activeMediaElement, activeMediaType);
+    } else if (activeFloatingBtn) {
+      hideFloatingButton(true);
     }
   }, { passive: true });
 
   window.addEventListener('resize', () => {
     if (isExtensionEnabled && activeMediaElement && activeFloatingBtn && activeFloatingBtn.style.display !== 'none') {
       updateFloatingButtonPosition(activeMediaElement, activeMediaType);
+    } else if (activeFloatingBtn) {
+      hideFloatingButton(true);
     }
   }, { passive: true });
+
+  window.addEventListener('blur', () => hideFloatingButton(true));
+
+  // Hide floating button immediately on click/pointer outside (e.g. closing modal via close button 'X' or backdrop)
+  const handleOutsideInteraction = (e) => {
+    if (!activeFloatingBtn || activeFloatingBtn.style.display === 'none') return;
+    if (e.target && e.target.closest && e.target.closest('.tmd-download-btn')) return;
+    hideFloatingButton(true);
+  };
+
+  window.addEventListener('pointerdown', handleOutsideInteraction, true);
+  window.addEventListener('mousedown', handleOutsideInteraction, true);
+  window.addEventListener('click', handleOutsideInteraction, true);
+
+  // Hide floating button immediately on ESC key or navigation keys (keydown & keyup in capture phase on window)
+  const handleKeyClose = (e) => {
+    if (e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27) {
+      hideFloatingButton(true);
+    }
+  };
+
+  window.addEventListener('keydown', handleKeyClose, true);
+  window.addEventListener('keyup', handleKeyClose, true);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) hideFloatingButton(true);
+  });
+  window.addEventListener('popstate', () => hideFloatingButton(true));
+  window.addEventListener('hashchange', () => hideFloatingButton(true));
+
+  if (typeof MutationObserver !== 'undefined' && document.body) {
+    const floatingStateObserver = new MutationObserver(() => validateFloatingButtonState());
+    floatingStateObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden']
+    });
+  }
+
+  // Modal close animations can leave the old media connected for a short time
+  // without producing mouse, keyboard or history events.
+  window.setInterval(validateFloatingButtonState, 200);
 
 })();
