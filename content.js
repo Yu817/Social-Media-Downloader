@@ -268,9 +268,8 @@
     return null;
   }
 
-  // Shallow React Fiber Walker: Only scans the element and its immediate 3 DOM parents,
-  // climbing at most 5 fiber.return levels. Used for IG Stories to avoid picking up
-  // video_versions data from adjacent pre-loaded story items in the fiber tree.
+  // Shallow React Fiber Walker: Scans element and 3 DOM parents up to 12 fiber.return levels.
+  // Used for IG Stories & Highlights to extract progressive video_versions with audio.
   function getUrlFromReactFiberShallow(element) {
     let curr = element;
     let domDepth = 0;
@@ -282,7 +281,7 @@
           let fiber = curr[key];
           let fiberDepth = 0;
 
-          while (fiber && fiberDepth < 5) {
+          while (fiber && fiberDepth < 12) {
             const props = fiber.memoizedProps || fiber.pendingProps;
             if (props) {
               const found = searchPropsForVideoVersions(props, 0, visited);
@@ -299,73 +298,9 @@
     return null;
   }
 
-  // Scan window.__additionalData and Redux stores for story video URL
-  // storyId: when provided, only return a URL for that specific story item
-  function scanWindowForStoryVideoUrl(storyId) {
-    try {
-      const ad = window.__additionalData;
-      if (ad) {
-        const url = deepFindVideoUrl(ad, new WeakSet(), 0, storyId);
-        if (url) return url;
-      }
-    } catch (e) {}
-
-    try {
-      const storeKeys = ['__reduxStore', '__reactStore', '__store'];
-      for (const k of storeKeys) {
-        if (window[k] && typeof window[k].getState === 'function') {
-          const state = window[k].getState();
-          const url = deepFindVideoUrl(state, new WeakSet(), 0, storyId);
-          if (url) return url;
-        }
-      }
-    } catch (e) {}
-
-    return null;
-  }
-
-  // Deep-scan any object tree for IG video_versions URLs
-  // storyId: when provided, only return a URL from an item whose pk/id matches
-  function deepFindVideoUrl(obj, visited, depth = 0, storyId = null) {
-    if (!obj || depth > 8 || typeof obj !== 'object') return null;
-    if (visited.has(obj)) return null;
-    visited.add(obj);
-
-    if (Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
-      // If storyId provided, check that this object's pk or id matches
-      if (storyId) {
-        const itemPk = String(obj.pk || obj.id || '');
-        if (itemPk && itemPk !== String(storyId)) {
-          // pk exists but doesn't match — skip this item
-          return null;
-        }
-      }
-      const sorted = [...obj.video_versions].sort((a, b) => (b.width || 0) - (a.width || 0));
-      for (const v of sorted) {
-        if (v && v.url && !isAudioOnlyUrl(v.url)) {
-          return cleanVideoUrl(v.url);
-        }
-      }
-    }
-
-    try {
-      for (const key of Object.keys(obj)) {
-        if (
-          key === 'video_versions' || key === 'items' || key === 'story' ||
-          key === 'media' || key === 'reel' || key === 'reels'
-        ) {
-          const result = deepFindVideoUrl(obj[key], visited, depth + 1, storyId);
-          if (result) return result;
-        }
-      }
-    } catch (e) {}
-
-    return null;
-  }
-
   // Resolve IG username to numeric user_id (needed for reels_media API)
   async function resolveUserId(username) {
-    if (!username) return null;
+    if (!username || username === 'highlights' || username.startsWith('highlight')) return null;
     try {
       const res = await fetch(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`, {
         credentials: 'include',
@@ -385,18 +320,24 @@
     return null;
   }
 
-  // Fetch the current IG story item via the API v1 endpoint (uses session cookie)
-  // The reels_media API requires a NUMERIC user_id, not a username string.
+  // Fetch the current IG story or highlight item via the API v1 endpoint (uses session cookie)
+  // Handles both regular user stories (numeric user_id) and IG Highlights (highlight:HIGHLIGHT_ID)
   async function fetchStoryItemFromApi(username, storyId) {
-    if (!username) return null;
+    if (!username && !storyId) return null;
 
-    // Step 1: Resolve username -> numeric user_id
-    const userId = await resolveUserId(username);
-    if (!userId) {
-      console.warn('[Social Media Downloader] Could not resolve user_id, falling back to username');
+    let targetId;
+    if (username === 'highlights' || (username && username.startsWith('highlight'))) {
+      const rawId = storyId || username;
+      targetId = rawId.startsWith('highlight:') ? rawId : `highlight:${rawId}`;
+      console.log('[Social Media Downloader] Fetching IG Highlight Reel API for:', targetId);
+    } else {
+      const userId = await resolveUserId(username);
+      if (!userId && username) {
+        console.warn('[Social Media Downloader] Could not resolve user_id, using fallback target:', username);
+      }
+      targetId = userId || username;
     }
 
-    const targetId = userId || username;
     const endpoints = [
       `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${targetId}`,
     ];
@@ -409,7 +350,7 @@
         if (!res.ok) continue;
         const data = await res.json();
 
-        // Collect all story items
+        // Collect all story items from response
         const allItems = [];
         const reels = data?.reels || data?.reels_media || {};
         for (const key of Object.keys(reels)) {
@@ -421,8 +362,8 @@
 
         if (allItems.length === 0) continue;
 
-        // If we have a story_id, find the EXACT matching item first
-        if (storyId) {
+        // If we have a specific story_id, find the EXACT matching item first
+        if (storyId && username !== 'highlights') {
           const exactItem = allItems.find(item =>
             String(item?.pk) === String(storyId) ||
             String(item?.id) === String(storyId)
@@ -433,16 +374,14 @@
           }
         }
 
-        // Fallback: return first item with video (only if no storyId to match)
-        if (!storyId) {
-          for (const item of allItems) {
-            if (item?.video_versions?.length > 0) {
-              return cleanVideoUrl(item.video_versions[0].url);
-            }
+        // Return first item with valid video_versions
+        for (const item of allItems) {
+          if (item?.video_versions?.length > 0) {
+            return cleanVideoUrl(item.video_versions[0].url);
           }
         }
       } catch (e) {
-        console.warn('[Social Media Downloader] IG Story API endpoint failed:', url, e);
+        console.warn('[Social Media Downloader] IG Story/Highlight API endpoint failed:', url, e);
       }
     }
     return null;
