@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.3.1 Loaded-Only Hover Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.3.2 Combined Progressive Stream Version)
 
 (function () {
   'use strict';
@@ -43,7 +43,7 @@
   }
 
   console.log(
-    '%c[Social Media Downloader v1.3.1] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.3.2] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -93,7 +93,7 @@
         if (efgMatch && efgMatch[1]) {
           let b64 = decodeURIComponent(efgMatch[1]);
           let decoded = window.atob(b64);
-          if (decoded.includes('audio')) {
+          if (decoded.includes('audio') && !decoded.includes('video')) {
             return true;
           }
         }
@@ -174,17 +174,18 @@
     return true;
   }
 
-  // Extract full unfragmented MP4 URL from React Fiber props (Meta/IG/Threads SPA)
+  // Extract full unfragmented COMBINED Video+Audio MP4 URL from React Fiber props (Meta/IG/Threads SPA)
   function getUrlFromReactFiber(element) {
     let curr = element;
     let depth = 0;
-    while (curr && depth < 8 && curr !== document.body) {
+    while (curr && depth < 10 && curr !== document.body) {
       for (const key in curr) {
         if (key.startsWith('__reactProps$') || key.startsWith('__reactFiber$')) {
           try {
             const val = curr[key];
             const jsonStr = JSON.stringify(val);
             
+            // 1. Highest Priority: video_versions array containing combined progressive video+audio
             const storyMatch = jsonStr.match(/"video_versions"\s*:\s*\[\s*\{[^}]*"url"\s*:\s*"([^"]+)"/i);
             if (storyMatch && storyMatch[1]) {
               let storyUrl = storyMatch[1].replace(/\\/g, '');
@@ -194,6 +195,17 @@
               }
             }
 
+            // 2. Search for progressive_url or video_url keys
+            const progMatch = jsonStr.match(/"(progressive_url|video_url)"\s*:\s*"([^"]+)"/i);
+            if (progMatch && progMatch[2]) {
+              let progUrl = progMatch[2].replace(/\\/g, '');
+              try { progUrl = JSON.parse(`"${progUrl}"`); } catch(e) {}
+              if (!isAudioOnlyUrl(progUrl)) {
+                return cleanVideoUrl(progUrl);
+              }
+            }
+
+            // 3. Fallback general mp4 regex search
             const match = jsonStr.match(/https?:\\?\/\\?\/[^\s"']+(\.mp4|\/v\/t51|\/v\/t64)[^\s"']*/i);
             if (match && match[0]) {
               let cleanUrl = match[0].replace(/\\/g, '');
@@ -223,7 +235,8 @@
 
         if ((name.includes('.mp4') || name.includes('/v/t51.') || name.includes('/v/t64.')) && (name.includes('cdninstagram.com') || name.includes('fbcdn.net') || name.includes('twimg.com'))) {
           const clean = cleanVideoUrl(name);
-          if (name.includes('dash_video') || name.includes('mime=video') || name.includes('_v.mp4')) {
+          // Prefer URLs with progressive tag or _n.mp4 over dash_video
+          if (name.includes('progressive') || name.includes('_n.mp4')) {
             return clean;
           }
           if (!fallbackVideoUrl) {
@@ -238,7 +251,7 @@
     return null;
   }
 
-  // Find best media element (only matches fully loaded media)
+  // Find best media element
   function findBestMediaElement(target) {
     if (target.tagName === 'IMG' && !isAvatarImage(target) && isImageReady(target)) {
       return { media: target, type: 'image' };
@@ -323,11 +336,13 @@
     return rawSrc;
   }
 
-  // Video Source Resolver
+  // Video Source Resolver (Prioritizes Combined Video+Audio Progressive Stream)
   function getVideoUrl(videoElement) {
+    // 1. Extract combined progressive MP4 URL from React Fiber props (Highest Priority)
     const reactUrl = getUrlFromReactFiber(videoElement);
     if (reactUrl && !isAudioOnlyUrl(reactUrl)) return reactUrl;
 
+    // 2. Direct src if not blob and not audio-only
     if (videoElement.src && !videoElement.src.startsWith('blob:') && !isAudioOnlyUrl(videoElement.src)) {
       return cleanVideoUrl(videoElement.src);
     }
@@ -335,6 +350,7 @@
       return cleanVideoUrl(videoElement.currentSrc);
     }
 
+    // 3. Check <source> tags
     const sources = videoElement.querySelectorAll('source');
     for (const source of sources) {
       if (source.src && !source.src.startsWith('blob:') && !isAudioOnlyUrl(source.src)) {
@@ -342,6 +358,7 @@
       }
     }
 
+    // 4. Fallback to Performance resource entries for MP4 (excluding audio-only)
     const networkUrl = getNetworkVideoUrl();
     if (networkUrl) return networkUrl;
 
@@ -405,7 +422,6 @@
       btn.setAttribute('data-tooltip', '下載中...');
       const ext = type === 'video' ? 'mp4' : 'jpg';
 
-      // Try Chrome Extension messaging with silent same-tab fallback (NO NEW TAB!)
       try {
         if (!chrome || !chrome.runtime || !chrome.runtime.sendMessage) {
           throw new Error('Chrome extension runtime disconnected.');
@@ -535,7 +551,6 @@
       const rect = result.media.getBoundingClientRect();
       const padding = 15;
 
-      // Verify mouse cursor is strictly within the loaded media element bounds
       if (
         e.clientX >= rect.left - padding &&
         e.clientX <= rect.right + padding &&
