@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.4.0 Live MediaStream Capture Engine Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.4.1 IG Story Dedicated Shield Version)
 
 (function () {
   'use strict';
@@ -43,7 +43,7 @@
   }
 
   console.log(
-    '%c[Social Media Downloader v1.4.0] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.4.1] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -103,12 +103,16 @@
     return false;
   }
 
-  // Multi-Layer Bulletproof Avatar Detector
+  // Multi-Layer Bulletproof Avatar & Header Detector
   function isAvatarImage(img) {
     if (!img) return true;
     const src = (img.currentSrc || img.src || '').toLowerCase();
     const alt = (img.alt || '').toLowerCase();
 
+    // Direct header or story header container check
+    if (img.closest('header')) return true;
+
+    // Meta / IG / Twitter / FB CDN URL-based Avatar Signature
     if (src.includes('t51.2885-19') || src.includes('t51.36379-19') || src.includes('s150x150') || src.includes('s320x320') || src.includes('/profile_images/')) {
       return true;
     }
@@ -116,35 +120,26 @@
       return true;
     }
 
-    if (alt.includes('profile') || alt.includes('avatar') || alt.includes('頭像') || alt.includes('大頭貼') || alt.includes('写真') || alt.includes('perfil')) {
+    // Multilingual Alt Keyword Check
+    if (alt.includes('profile') || alt.includes('avatar') || alt.includes('頭像') || alt.includes('大頭貼') || alt.includes('写真') || alt.includes('perfil') || alt.includes('user')) {
       return true;
     }
-
-    if (img.closest('header')) return true;
 
     const parentAnchor = img.closest('a');
     if (parentAnchor) {
       const href = (parentAnchor.getAttribute('href') || '').toLowerCase();
       if (href && !href.includes('/p/') && !href.includes('/post/') && !href.includes('/status/') && !href.includes('/reel/') && !href.includes('/tv/')) {
         const aRect = parentAnchor.getBoundingClientRect();
-        if (aRect.width < 160 && aRect.height < 160) {
+        if (aRect.width < 180 && aRect.height < 180) {
           return true;
         }
       }
     }
 
+    // Dimension & Area Check: Avatars are small or square
     const rect = img.getBoundingClientRect();
-    if (rect.width < 120 || rect.height < 120) {
-      const article = img.closest('article, section, [role="article"]');
-      if (article) {
-        const otherImgs = article.querySelectorAll('img');
-        for (const other of otherImgs) {
-          const oRect = other.getBoundingClientRect();
-          if (oRect.width > rect.width * 1.8 && oRect.height > rect.height * 1.8) {
-            return true;
-          }
-        }
-      }
+    if (rect.width < 150 || rect.height < 150) {
+      return true;
     }
 
     return false;
@@ -154,11 +149,11 @@
   function isImageReady(img) {
     if (!img) return false;
     if (!img.complete) return false;
-    if (!img.naturalWidth || img.naturalWidth < 80 || !img.naturalHeight || img.naturalHeight < 80) {
+    if (!img.naturalWidth || img.naturalWidth < 120 || !img.naturalHeight || img.naturalHeight < 120) {
       return false;
     }
     const rect = img.getBoundingClientRect();
-    if (rect.width < 80 || rect.height < 80) return false;
+    if (rect.width < 120 || rect.height < 120) return false;
     return true;
   }
 
@@ -220,7 +215,7 @@
     return null;
   }
 
-  // Deep React Component Fiber Tree Walker (Climbs fiber.return up to 30 levels)
+  // Deep React Component Fiber Tree Walker
   function getUrlFromReactFiber(element) {
     let curr = element;
     let depth = 0;
@@ -277,7 +272,7 @@
     return null;
   }
 
-  // Fetch Instagram Story Reel Media API by username/user_id for Story video with full audio
+  // Fetch Instagram Story Reel Media API by username
   async function fetchInstagramStoryVideo(username, storyId) {
     if (!username && !storyId) return null;
     try {
@@ -306,7 +301,7 @@
     return null;
   }
 
-  // Extract recent video MP4 URL from Performance network resource logs (prioritizes combined progressive stream)
+  // Extract recent video MP4 URL from Performance network resource logs
   function getNetworkVideoUrl() {
     try {
       const entries = performance.getEntriesByType('resource');
@@ -353,7 +348,6 @@
         throw new Error('captureStream API unsupported');
       }
 
-      // Check audio tracks; if missing on video element, inspect page <audio> elements
       let audioTracks = stream.getAudioTracks();
       if (audioTracks.length === 0) {
         const audioEls = document.querySelectorAll('audio');
@@ -390,7 +384,6 @@
         }
       };
 
-      // Rewind video if near end to capture full story duration
       if (videoElement.duration && videoElement.currentTime > videoElement.duration - 1) {
         videoElement.currentTime = 0;
       }
@@ -442,8 +435,43 @@
     }
   }
 
-  // Find best media element
+  // Target best media element with IG Story dedicated targeting shield
   function findBestMediaElement(target) {
+    // 1. Instagram Stories Dedicated View Resolver
+    if (isInstagram && window.location.pathname.includes('/stories/')) {
+      const storyContainer = target.closest ? target.closest('section, div[role="dialog"], [role="presentation"]') : null;
+      if (storyContainer) {
+        // ALWAYS prefer active story video first
+        const storyVideos = storyContainer.querySelectorAll('video');
+        for (const v of storyVideos) {
+          if (isVideoReady(v)) {
+            return { media: v, type: 'video' };
+          }
+        }
+
+        // If no video, find main story image (excluding header & avatar images)
+        const storyImgs = storyContainer.querySelectorAll('img');
+        let bestStoryImg = null;
+        let maxArea = 0;
+
+        for (const img of storyImgs) {
+          if (!isAvatarImage(img) && isImageReady(img)) {
+            const rect = img.getBoundingClientRect();
+            const area = rect.width * rect.height;
+            if (rect.width > 200 && rect.height > 300 && area > maxArea) {
+              maxArea = area;
+              bestStoryImg = img;
+            }
+          }
+        }
+
+        if (bestStoryImg) {
+          return { media: bestStoryImg, type: 'image' };
+        }
+      }
+    }
+
+    // 2. Standard feed media element matching
     if (target.tagName === 'IMG' && !isAvatarImage(target) && isImageReady(target)) {
       return { media: target, type: 'image' };
     }
@@ -623,7 +651,6 @@
       // Special IG Stories Live Capture Engine Trigger if direct progressive URL unavailable
       if (isInstagram && type === 'video' && window.location.pathname.includes('/stories/')) {
         const mediaUrl = await resolveMediaUrl(activeMediaElement, type);
-        // If resolved URL is network fallback or blob, use 100% audio+video live stream capture engine
         if (!mediaUrl || mediaUrl.includes('dash') || mediaUrl.startsWith('blob:')) {
           const success = await captureAndDownloadLiveStream(activeMediaElement, btn);
           if (success) return;
