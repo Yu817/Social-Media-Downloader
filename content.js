@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.4.1 IG Story Dedicated Shield Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.4.2 Direct-Hover-Only Engine)
 
 (function () {
   'use strict';
@@ -43,7 +43,7 @@
   }
 
   console.log(
-    '%c[Social Media Downloader v1.4.1] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.4.2] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -103,69 +103,84 @@
     return false;
   }
 
-  // Multi-Layer Bulletproof Avatar & Header Detector
-  function isAvatarImage(img) {
+  // =========================================================================
+  // STRICT AVATAR / NON-CONTENT DETECTOR
+  // Returns true if the image should be IGNORED (is a profile pic, icon, etc.)
+  // =========================================================================
+  function isAvatarOrIcon(img) {
     if (!img) return true;
+
     const src = (img.currentSrc || img.src || '').toLowerCase();
     const alt = (img.alt || '').toLowerCase();
+    const classList = (img.className || '');
+    const role = (img.getAttribute('role') || '').toLowerCase();
+    const ariaLabel = (img.getAttribute('aria-label') || '').toLowerCase();
 
-    // Direct header or story header container check
+    // 1. Role or aria-label signals it's an icon / logo
+    if (role === 'img' && (ariaLabel.includes('profile') || ariaLabel.includes('avatar') || ariaLabel.includes('logo'))) return true;
+
+    // 2. Inside a <header> tag
     if (img.closest('header')) return true;
 
-    // Meta / IG / Twitter / FB CDN URL-based Avatar Signature
-    if (src.includes('t51.2885-19') || src.includes('t51.36379-19') || src.includes('s150x150') || src.includes('s320x320') || src.includes('/profile_images/')) {
-      return true;
-    }
-    if (src.includes('/p100x100/') || src.includes('/p50x50/') || src.includes('/p160x160/') || src.includes('/75x75_')) {
-      return true;
-    }
+    // 3. CDN URL patterns for avatars (Meta/IG/Twitter specific)
+    if (
+      src.includes('t51.2885-19') || src.includes('t51.36379-19') ||
+      src.includes('s150x150') || src.includes('s320x320') || src.includes('s640x640') ||
+      src.includes('/profile_images/') ||
+      src.includes('/p100x100/') || src.includes('/p50x50/') || src.includes('/p160x160/') ||
+      src.includes('/75x75_') || src.includes('/150x150/')
+    ) return true;
 
-    // Multilingual Alt Keyword Check
-    if (alt.includes('profile') || alt.includes('avatar') || alt.includes('頭像') || alt.includes('大頭貼') || alt.includes('写真') || alt.includes('perfil') || alt.includes('user')) {
-      return true;
-    }
+    // 4. Alt text keywords (multilingual)
+    if (
+      alt.includes('profile') || alt.includes('avatar') || alt.includes('icon') ||
+      alt.includes('頭像') || alt.includes('大頭貼') || alt.includes('写真') ||
+      alt.includes('perfil') || alt.includes('photo de profil')
+    ) return true;
 
+    // 5. Class-based heuristics (IG, Threads, Twitter all use these)
+    if (
+      classList.includes('Avatar') || classList.includes('avatar') ||
+      classList.includes('ProfilePhoto') || classList.includes('profile') ||
+      classList.includes('_aadp') // IG avatar class
+    ) return true;
+
+    // 6. Strict minimum rendered size: anything smaller than 200x200 in viewport is NOT post content
+    const rect = img.getBoundingClientRect();
+    if (rect.width < 200 || rect.height < 200) return true;
+
+    // 7. If nested inside a small anchor (<200px) that doesn't link to a post/reel
     const parentAnchor = img.closest('a');
     if (parentAnchor) {
       const href = (parentAnchor.getAttribute('href') || '').toLowerCase();
-      if (href && !href.includes('/p/') && !href.includes('/post/') && !href.includes('/status/') && !href.includes('/reel/') && !href.includes('/tv/')) {
+      const isPostLink = href.includes('/p/') || href.includes('/post/') || href.includes('/status/') || href.includes('/reel/') || href.includes('/tv/');
+      if (!isPostLink) {
         const aRect = parentAnchor.getBoundingClientRect();
-        if (aRect.width < 180 && aRect.height < 180) {
-          return true;
-        }
+        if (aRect.width < 200 || aRect.height < 200) return true;
       }
-    }
-
-    // Dimension & Area Check: Avatars are small or square
-    const rect = img.getBoundingClientRect();
-    if (rect.width < 150 || rect.height < 150) {
-      return true;
     }
 
     return false;
   }
 
-  // Verify image is fully loaded and rendered
-  function isImageReady(img) {
+  // Is the image fully rendered and large enough to be post content?
+  function isContentImage(img) {
     if (!img) return false;
-    if (!img.complete) return false;
-    if (!img.naturalWidth || img.naturalWidth < 120 || !img.naturalHeight || img.naturalHeight < 120) {
-      return false;
-    }
+    if (!img.complete || !img.naturalWidth || img.naturalWidth < 200 || !img.naturalHeight || img.naturalHeight < 200) return false;
     const rect = img.getBoundingClientRect();
-    if (rect.width < 120 || rect.height < 120) return false;
-    return true;
+    return rect.width >= 200 && rect.height >= 200;
   }
 
-  // Verify video is loaded and has video metadata/frames
-  function isVideoReady(video) {
+  // Is the video fully loaded with real video dimensions?
+  function isContentVideo(video) {
     if (!video) return false;
-    if (video.readyState < 1 && !video.videoWidth) return false;
-    const width = video.videoWidth || video.width || 0;
-    const height = video.videoHeight || video.height || 0;
-    if (width < 80 || height < 80) return false;
+    const width = video.videoWidth || 0;
+    const height = video.videoHeight || 0;
+    // Accept if intrinsic dimensions available, OR if rendered size is large enough
     const rect = video.getBoundingClientRect();
     if (rect.width < 80 || rect.height < 80) return false;
+    // readyState >= HAVE_METADATA (1) means video loaded
+    if (video.readyState < 1 && width === 0) return false;
     return true;
   }
 
@@ -435,82 +450,44 @@
     }
   }
 
-  // Target best media element with IG Story dedicated targeting shield
-  function findBestMediaElement(target) {
-    // 1. Instagram Stories Dedicated View Resolver
+  // =========================================================================
+  // DIRECT-HOVER-ONLY MEDIA DETECTOR
+  // The button ONLY appears when the mouse is directly on an <img> or <video>
+  // that passes strict content checks. No parent-climbing allowed.
+  // =========================================================================
+  function findDirectMediaElement(target) {
+    // Case 1: mouse is directly ON a <video>
+    if (target.tagName === 'VIDEO') {
+      if (isContentVideo(target)) {
+        return { media: target, type: 'video' };
+      }
+      return null;
+    }
+
+    // Case 2: mouse is directly ON an <img>
+    if (target.tagName === 'IMG') {
+      if (!isAvatarOrIcon(target) && isContentImage(target)) {
+        return { media: target, type: 'image' };
+      }
+      return null;
+    }
+
+    // Case 3: IG Stories special case — when hovering over the story player overlay div,
+    // find the active <video> or large <img> INSIDE that overlay only.
     if (isInstagram && window.location.pathname.includes('/stories/')) {
-      const storyContainer = target.closest ? target.closest('section, div[role="dialog"], [role="presentation"]') : null;
-      if (storyContainer) {
-        // ALWAYS prefer active story video first
-        const storyVideos = storyContainer.querySelectorAll('video');
-        for (const v of storyVideos) {
-          if (isVideoReady(v)) {
+      // Look for video directly inside the immediate story player container (max 2 levels up)
+      let container = target.parentElement;
+      let depth = 0;
+      while (container && depth < 3 && container !== document.body) {
+        const videos = container.querySelectorAll('video');
+        for (const v of videos) {
+          if (isContentVideo(v)) {
             return { media: v, type: 'video' };
           }
         }
-
-        // If no video, find main story image (excluding header & avatar images)
-        const storyImgs = storyContainer.querySelectorAll('img');
-        let bestStoryImg = null;
-        let maxArea = 0;
-
-        for (const img of storyImgs) {
-          if (!isAvatarImage(img) && isImageReady(img)) {
-            const rect = img.getBoundingClientRect();
-            const area = rect.width * rect.height;
-            if (rect.width > 200 && rect.height > 300 && area > maxArea) {
-              maxArea = area;
-              bestStoryImg = img;
-            }
-          }
-        }
-
-        if (bestStoryImg) {
-          return { media: bestStoryImg, type: 'image' };
-        }
+        container = container.parentElement;
+        depth++;
       }
-    }
-
-    // 2. Standard feed media element matching
-    if (target.tagName === 'IMG' && !isAvatarImage(target) && isImageReady(target)) {
-      return { media: target, type: 'image' };
-    }
-    if (target.tagName === 'VIDEO' && isVideoReady(target)) {
-      return { media: target, type: 'video' };
-    }
-
-    let parent = target.closest ? target.closest('div, li, article, figure, section') : null;
-    let depth = 0;
-
-    while (parent && depth < 5 && parent !== document.body) {
-      const videos = parent.querySelectorAll('video');
-      for (const v of videos) {
-        if (isVideoReady(v)) {
-          return { media: v, type: 'video' };
-        }
-      }
-
-      const images = parent.querySelectorAll('img');
-      let bestImg = null;
-      let maxArea = 0;
-
-      for (const img of images) {
-        if (!isAvatarImage(img) && isImageReady(img)) {
-          const rect = img.getBoundingClientRect();
-          const area = rect.width * rect.height;
-          if (area > maxArea) {
-            maxArea = area;
-            bestImg = img;
-          }
-        }
-      }
-
-      if (bestImg) {
-        return { media: bestImg, type: 'image' };
-      }
-
-      parent = parent.parentElement;
-      depth++;
     }
 
     return null;
@@ -783,7 +760,9 @@
     }
   }
 
-  // Global mousemove listener with strict hover bounds and readiness checks
+  // =========================================================================
+  // MOUSEMOVE: Only show button when mouse is DIRECTLY on a content media element
+  // =========================================================================
   let hoverCheckTimer = null;
   document.addEventListener('mousemove', (e) => {
     if (!isExtensionEnabled) {
@@ -794,28 +773,21 @@
     const target = e.target;
     if (!target) return;
 
-    if (target.closest('.tmd-download-btn')) return;
+    // Ignore hover events on the button itself
+    if (target.closest && target.closest('.tmd-download-btn')) return;
 
-    const result = findBestMediaElement(target);
+    const result = findDirectMediaElement(target);
     if (result && result.media) {
-      const rect = result.media.getBoundingClientRect();
-      const padding = 15;
-
-      if (
-        e.clientX >= rect.left - padding &&
-        e.clientX <= rect.right + padding &&
-        e.clientY >= rect.top - padding &&
-        e.clientY <= rect.bottom + padding
-      ) {
-        updateFloatingButtonPosition(result.media, result.type);
-        return;
-      }
+      updateFloatingButtonPosition(result.media, result.type);
+      if (hoverCheckTimer) { clearTimeout(hoverCheckTimer); hoverCheckTimer = null; }
+      return;
     }
 
+    // Mouse moved off media — hide after short delay to allow clicking the button
     if (hoverCheckTimer) clearTimeout(hoverCheckTimer);
     hoverCheckTimer = setTimeout(() => {
       hideFloatingButton();
-    }, 300);
+    }, 350);
   }, { passive: true });
 
   window.addEventListener('scroll', () => {
