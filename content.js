@@ -186,7 +186,7 @@
 
   // Safe Props Inspector for video_versions array in Component State
   function searchPropsForVideoVersions(obj, depth = 0, visited = new WeakSet()) {
-    if (!obj || depth > 6 || typeof obj !== 'object') return null;
+    if (!obj || depth > 8 || typeof obj !== 'object') return null;
     if (visited.has(obj)) return null;
     visited.add(obj);
 
@@ -203,6 +203,16 @@
     }
 
     try {
+      // Check hooks memoizedState linked list
+      if (obj.memoizedState && typeof obj.memoizedState === 'object') {
+        const found = searchPropsForVideoVersions(obj.memoizedState, depth + 1, visited);
+        if (found) return found;
+      }
+      if (obj.next && typeof obj.next === 'object') {
+        const found = searchPropsForVideoVersions(obj.next, depth + 1, visited);
+        if (found) return found;
+      }
+
       if (obj.item && typeof obj.item === 'object') {
         const found = searchPropsForVideoVersions(obj.item, depth + 1, visited);
         if (found) return found;
@@ -217,7 +227,11 @@
       }
 
       for (const k in obj) {
-        if (k === 'children' || k.includes('video') || k.includes('story') || k.includes('item') || k.includes('media') || k.includes('Reel')) {
+        if (
+          k === 'children' || k.includes('video') || k.includes('story') ||
+          k.includes('item') || k.includes('media') || k.includes('Reel') ||
+          k === 'memoizedProps' || k === 'pendingProps' || k === 'stateNode'
+        ) {
           const val = obj[k];
           if (val && typeof val === 'object') {
             const found = searchPropsForVideoVersions(val, depth + 1, visited);
@@ -384,6 +398,35 @@
     return null;
   }
 
+  // Get active slide index for stories & highlights from top progress bar segments
+  function getActiveStoryIndex() {
+    try {
+      const storyOverlay = document.querySelector('section, div[role="dialog"], [role="presentation"]');
+      if (!storyOverlay) return -1;
+
+      const barContainers = storyOverlay.querySelectorAll('div._ac3r, div._aa67, header > div');
+      for (const container of barContainers) {
+        const bars = container.children;
+        if (bars && bars.length > 0) {
+          for (let i = 0; i < bars.length; i++) {
+            const bar = bars[i];
+            const inner = bar.querySelector('div') || bar;
+            const style = (inner.getAttribute('style') || '').toLowerCase();
+            const width = inner.style.width || '';
+
+            if (style.includes('scalex') && !style.includes('scalex(0)') && !style.includes('scalex(1)')) {
+              return i;
+            }
+            if (width && width !== '0%' && width !== '0px' && width !== '100%') {
+              return i;
+            }
+          }
+        }
+      }
+    } catch (e) {}
+    return -1;
+  }
+
   // Fetch the current IG story or highlight item via the API v1 endpoint (uses session cookie)
   // Handles both regular user stories (numeric user_id) and IG Highlights (highlight:HIGHLIGHT_ID)
   async function fetchStoryItemFromApi(username, storyId) {
@@ -426,7 +469,7 @@
 
         if (allItems.length === 0) continue;
 
-        // If we have a specific story_id, find the EXACT matching item first
+        // 1. If we have a specific story_id (for normal user stories), find matching item first
         if (storyId && username !== 'highlights') {
           const exactItem = allItems.find(item =>
             String(item?.pk) === String(storyId) ||
@@ -438,7 +481,17 @@
           }
         }
 
-        // Return first item with valid video_versions
+        // 2. For Highlights or multi-item reels: match using active progress bar slide index!
+        const activeIdx = getActiveStoryIndex();
+        if (activeIdx >= 0 && activeIdx < allItems.length) {
+          const activeItem = allItems[activeIdx];
+          if (activeItem?.video_versions?.length > 0) {
+            console.log('[Social Media Downloader] Matched highlight story item by active slide index:', activeIdx);
+            return cleanVideoUrl(activeItem.video_versions[0].url);
+          }
+        }
+
+        // 3. Fallback: return first item with valid video_versions
         for (const item of allItems) {
           if (item?.video_versions?.length > 0) {
             return cleanVideoUrl(item.video_versions[0].url);
