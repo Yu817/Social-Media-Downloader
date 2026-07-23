@@ -1,7 +1,12 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.2.3 Unfragmented Stream Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.2.4 Top-Window & Video-Track Only Version)
 
 (function () {
   'use strict';
+
+  // Only run in top window frame, ignore sub-iframes (e.g. Meta/Facebook tracking or auth iframes inside IG)
+  if (window !== window.top) {
+    return;
+  }
 
   const host = window.location.hostname.toLowerCase();
 
@@ -33,7 +38,7 @@
   });
 
   console.log(
-    '%c[Social Media Downloader v1.2.3] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.2.4] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -58,15 +63,21 @@
     </svg>
   `;
 
-  // Clean video URL by removing byte range chunk parameters
+  // Clean video URL by removing DASH byte range parameters
   function cleanVideoUrl(url) {
     if (!url) return null;
     let clean = url;
-    // Strip Instagram DASH byte range parameters that fragment MP4 files
     clean = clean.replace(/([?&])bytestart=\d+&?/g, '$1');
     clean = clean.replace(/([?&])byteend=\d+&?/g, '$1');
     clean = clean.replace(/[?&]$/, '');
     return clean;
+  }
+
+  // Check if URL is an audio-only track
+  function isAudioOnlyUrl(url) {
+    if (!url) return false;
+    const lower = url.toLowerCase();
+    return lower.includes('_a.mp4') || lower.includes('mime=audio') || lower.includes('audio_') || lower.includes('.mp3');
   }
 
   // Extract full unfragmented MP4 URL from React Fiber props (Meta/IG/Threads SPA)
@@ -85,7 +96,9 @@
             if (storyMatch && storyMatch[1]) {
               let storyUrl = storyMatch[1].replace(/\\/g, '');
               try { storyUrl = JSON.parse(`"${storyUrl}"`); } catch(e) {}
-              return cleanVideoUrl(storyUrl);
+              if (!isAudioOnlyUrl(storyUrl)) {
+                return cleanVideoUrl(storyUrl);
+              }
             }
 
             // General mp4 regex search
@@ -93,7 +106,9 @@
             if (match && match[0]) {
               let cleanUrl = match[0].replace(/\\/g, '');
               try { cleanUrl = JSON.parse(`"${cleanUrl}"`); } catch(e) {}
-              return cleanVideoUrl(cleanUrl);
+              if (!isAudioOnlyUrl(cleanUrl)) {
+                return cleanVideoUrl(cleanUrl);
+              }
             }
           } catch (e) {}
         }
@@ -104,12 +119,15 @@
     return null;
   }
 
-  // Extract recent video MP4 URL from Performance network resource logs
+  // Extract recent video MP4 URL from Performance network resource logs (excluding audio-only tracks)
   function getNetworkVideoUrl() {
     try {
       const entries = performance.getEntriesByType('resource');
       for (let i = entries.length - 1; i >= 0; i--) {
         const name = entries[i].name;
+        // Exclude audio-only tracks
+        if (isAudioOnlyUrl(name)) continue;
+
         if ((name.includes('.mp4') || name.includes('/v/t51.') || name.includes('/v/t64.')) && (name.includes('cdninstagram.com') || name.includes('fbcdn.net') || name.includes('twimg.com'))) {
           return cleanVideoUrl(name);
         }
@@ -227,23 +245,29 @@
     return rawSrc;
   }
 
-  // Video Source Resolver (Prioritizes complete unfragmented MP4 URLs)
+  // Video Source Resolver (Prioritizes complete video stream over audio tracks)
   function getVideoUrl(videoElement) {
-    // 1. Extract original MP4 URL from React Fiber props (Highest Priority for IG Stories)
+    // 1. Extract original MP4 URL from React Fiber props (Highest Priority)
     const reactUrl = getUrlFromReactFiber(videoElement);
-    if (reactUrl) return reactUrl;
+    if (reactUrl && !isAudioOnlyUrl(reactUrl)) return reactUrl;
 
-    // 2. Direct src if not blob
-    if (videoElement.src && !videoElement.src.startsWith('blob:')) return cleanVideoUrl(videoElement.src);
-    if (videoElement.currentSrc && !videoElement.currentSrc.startsWith('blob:')) return cleanVideoUrl(videoElement.currentSrc);
+    // 2. Direct src if not blob and not audio-only
+    if (videoElement.src && !videoElement.src.startsWith('blob:') && !isAudioOnlyUrl(videoElement.src)) {
+      return cleanVideoUrl(videoElement.src);
+    }
+    if (videoElement.currentSrc && !videoElement.currentSrc.startsWith('blob:') && !isAudioOnlyUrl(videoElement.currentSrc)) {
+      return cleanVideoUrl(videoElement.currentSrc);
+    }
 
     // 3. Check <source> tags
     const sources = videoElement.querySelectorAll('source');
     for (const source of sources) {
-      if (source.src && !source.src.startsWith('blob:')) return cleanVideoUrl(source.src);
+      if (source.src && !source.src.startsWith('blob:') && !isAudioOnlyUrl(source.src)) {
+        return cleanVideoUrl(source.src);
+      }
     }
 
-    // 4. Fallback to Performance resource entries for MP4
+    // 4. Fallback to Performance resource entries for MP4 (excluding audio-only)
     const networkUrl = getNetworkVideoUrl();
     if (networkUrl) return networkUrl;
 
