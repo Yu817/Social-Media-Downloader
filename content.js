@@ -572,8 +572,9 @@
   }
 
   // =========================================================================
-  // MEDIA DETECTOR: Uses elementsFromPoint to find media under overlay divs
-  // This is critical for Threads/IG where overlay divs sit on top of images
+  // MEDIA DETECTOR: Uses elementsFromPoint to find media under overlay divs.
+  // Critical: each found element's bounding rect must CONTAIN the mouse pos
+  // to avoid matching carousel slides or adjacent posts' media.
   // =========================================================================
   function findDirectMediaElement(target, mouseX, mouseY) {
     // Case 1: mouse is directly ON a <video>
@@ -592,17 +593,20 @@
       return null;
     }
 
-    // Case 3: Mouse is on an overlay div — use elementsFromPoint to find
-    // the <img> or <video> underneath the current mouse position.
-    // This fixes Threads/IG feed where overlay divs cover the actual media.
-    const rect = target.getBoundingClientRect();
-    if (rect.width > 150 && rect.height > 150) {
-      const px = mouseX || (rect.left + rect.width / 2);
-      const py = mouseY || (rect.top + rect.height / 2);
+    // Case 3: Mouse is on an overlay div — probe through the z-stack
+    // to find media elements whose visible area contains the mouse.
+    if (mouseX && mouseY) {
       try {
-        const stack = document.elementsFromPoint(px, py);
+        const stack = document.elementsFromPoint(mouseX, mouseY);
         for (const el of stack) {
           if (el === target || el.classList.contains('tmd-download-btn')) continue;
+
+          // Verify this element's rendered rect actually contains the mouse
+          const elRect = el.getBoundingClientRect();
+          if (elRect.width < 80 || elRect.height < 80) continue;
+          if (mouseX < elRect.left || mouseX > elRect.right ||
+              mouseY < elRect.top || mouseY > elRect.bottom) continue;
+
           if (el.tagName === 'VIDEO' && isContentVideo(el)) {
             return { media: el, type: 'video' };
           }
