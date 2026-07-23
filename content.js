@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.2.6 Bulletproof Avatar Shield Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.2.7 Full Video Track Priority Version)
 
 (function () {
   'use strict';
@@ -43,7 +43,7 @@
   }
 
   console.log(
-    '%c[Social Media Downloader v1.2.6] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.2.7] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -78,11 +78,32 @@
     return clean;
   }
 
-  // Check if URL is an audio-only track
+  // Multi-Layer Audio-Only Stream Detector (Includes Meta efg Base64 decoding)
   function isAudioOnlyUrl(url) {
     if (!url) return false;
     const lower = url.toLowerCase();
-    return lower.includes('_a.mp4') || lower.includes('mime=audio') || lower.includes('audio_') || lower.includes('.mp3');
+
+    // Direct string keyword checks
+    if (lower.includes('dash_audio') || lower.includes('_a.mp4') || lower.includes('mime=audio') || lower.includes('audio_') || lower.includes('.mp3')) {
+      return true;
+    }
+
+    // Decode Meta efg Base64 parameter to detect hidden audio streams
+    if (lower.includes('efg=')) {
+      try {
+        const efgMatch = url.match(/[?&]efg=([^&]+)/);
+        if (efgMatch && efgMatch[1]) {
+          let b64 = decodeURIComponent(efgMatch[1]);
+          // Standard base64 decode
+          let decoded = window.atob(b64);
+          if (decoded.includes('audio')) {
+            return true;
+          }
+        }
+      } catch (e) {}
+    }
+
+    return false;
   }
 
   // Multi-Layer Bulletproof Avatar Detector
@@ -110,7 +131,6 @@
     const parentAnchor = img.closest('a');
     if (parentAnchor) {
       const href = (parentAnchor.getAttribute('href') || '').toLowerCase();
-      // If anchor links to user profile and not a post/status/reel
       if (href && !href.includes('/p/') && !href.includes('/post/') && !href.includes('/status/') && !href.includes('/reel/') && !href.includes('/tv/')) {
         const aRect = parentAnchor.getBoundingClientRect();
         if (aRect.width < 160 && aRect.height < 160) {
@@ -128,7 +148,7 @@
         for (const other of otherImgs) {
           const oRect = other.getBoundingClientRect();
           if (oRect.width > rect.width * 1.8 && oRect.height > rect.height * 1.8) {
-            return true; // Much smaller than main post photo -> avatar
+            return true;
           }
         }
       }
@@ -176,18 +196,28 @@
     return null;
   }
 
-  // Extract recent video MP4 URL from Performance network resource logs (excluding audio-only tracks)
+  // Extract recent video MP4 URL from Performance network resource logs (Prioritizes video streams, skips audio)
   function getNetworkVideoUrl() {
     try {
       const entries = performance.getEntriesByType('resource');
+      let fallbackVideoUrl = null;
+
       for (let i = entries.length - 1; i >= 0; i--) {
         const name = entries[i].name;
         if (isAudioOnlyUrl(name)) continue;
 
         if ((name.includes('.mp4') || name.includes('/v/t51.') || name.includes('/v/t64.')) && (name.includes('cdninstagram.com') || name.includes('fbcdn.net') || name.includes('twimg.com'))) {
-          return cleanVideoUrl(name);
+          const clean = cleanVideoUrl(name);
+          // If URL explicitly contains video indicator, return immediately
+          if (name.includes('dash_video') || name.includes('mime=video') || name.includes('_v.mp4')) {
+            return clean;
+          }
+          if (!fallbackVideoUrl) {
+            fallbackVideoUrl = clean;
+          }
         }
       }
+      return fallbackVideoUrl;
     } catch (e) {
       console.warn('[Social Media Downloader] Performance entry lookup error:', e);
     }
@@ -282,7 +312,7 @@
 
   // Video Source Resolver (Prioritizes complete video stream over audio tracks)
   function getVideoUrl(videoElement) {
-    // 1. Extract original MP4 URL from React Fiber props (Highest Priority)
+    // 1. Extract original MP4 URL from React Fiber props (Highest Priority for IG Stories)
     const reactUrl = getUrlFromReactFiber(videoElement);
     if (reactUrl && !isAudioOnlyUrl(reactUrl)) return reactUrl;
 
