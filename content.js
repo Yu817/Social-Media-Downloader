@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform Support
+// Social Media Downloader Content Script - Multi-Platform Support (with Instagram Stories fix)
 
 (function () {
   'use strict';
@@ -100,14 +100,15 @@
     return rawSrc;
   }
 
-  // Video Source Resolver
+  // Video Source Resolver (prioritizes currentSrc for Instagram Stories & HTML5 players)
   function getVideoUrl(videoElement) {
-    if (videoElement.src) return videoElement.src;
+    if (videoElement.currentSrc) return videoElement.currentSrc;
+    if (videoElement.src && !videoElement.src.startsWith('blob:')) return videoElement.src;
     const sources = videoElement.querySelectorAll('source');
     for (const source of sources) {
-      if (source.src) return source.src;
+      if (source.src && !source.src.startsWith('blob:')) return source.src;
     }
-    return videoElement.currentSrc || null;
+    return videoElement.src || null;
   }
 
   // Resolve media URL to downloadable string
@@ -269,7 +270,7 @@
       media = target;
       type = 'video';
     } else {
-      const parentMedia = target.closest('div, a, article, figure');
+      const parentMedia = target.closest('div, a, article, figure, section');
       if (parentMedia) {
         const img = parentMedia.querySelector('img');
         const video = parentMedia.querySelector('video');

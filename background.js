@@ -1,8 +1,8 @@
-// Social Media Downloader Background Service Worker
+// Social Media Downloader Background Service Worker - Fetch Blob Anti-CORS Version
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'download' && request.url) {
-    chrome.storage.local.get(['filenameFormat', 'customPrefix', 'downloadHistory'], (data) => {
+    chrome.storage.local.get(['filenameFormat', 'customPrefix', 'downloadHistory'], async (data) => {
       const timestamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
       const ext = request.ext || (request.type === 'video' ? 'mp4' : 'jpg');
       const site = request.site || 'Social';
@@ -15,13 +15,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
       const filename = `${prefix}${timestamp}.${ext}`;
 
+      let downloadTargetUrl = request.url;
+      let blobUrlToRevoke = null;
+
+      // Handle HTTP/HTTPS URLs by fetching blob locally to bypass CORS and Network Error
+      if (request.url.startsWith('http://') || request.url.startsWith('https://')) {
+        try {
+          const res = await fetch(request.url, { credentials: 'include' });
+          if (res.ok) {
+            const blob = await res.blob();
+            downloadTargetUrl = URL.createObjectURL(blob);
+            blobUrlToRevoke = downloadTargetUrl;
+          }
+        } catch (err) {
+          console.warn('[Social Media Downloader] Fetch blob fallback to raw URL:', err);
+        }
+      }
+
       chrome.downloads.download(
         {
-          url: request.url,
+          url: downloadTargetUrl,
           filename: filename,
           saveAs: false
         },
         (downloadId) => {
+          if (blobUrlToRevoke) {
+            setTimeout(() => URL.revokeObjectURL(blobUrlToRevoke), 15000);
+          }
+
           if (chrome.runtime.lastError) {
             console.error('[Social Media Downloader] Download failed:', chrome.runtime.lastError);
             sendResponse({ success: false, error: chrome.runtime.lastError.message });
@@ -37,7 +58,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               site: site,
               url: request.url
             });
-            // Keep latest 20 items
             if (history.length > 20) history.pop();
             chrome.storage.local.set({ downloadHistory: history });
 
@@ -46,6 +66,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
       );
     });
-    return true; // Keep channel open for async sendResponse
+    return true; // Keep channel open for async response
   }
 });
