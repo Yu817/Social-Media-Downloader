@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.3.3 Non-Circular React Fiber Walker Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.3.4 Dual-API & Progressive Video Priority Version)
 
 (function () {
   'use strict';
@@ -43,7 +43,7 @@
   }
 
   console.log(
-    '%c[Social Media Downloader v1.3.3] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.3.4] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -180,7 +180,6 @@
     if (visited.has(obj)) return null;
     visited.add(obj);
 
-    // 1. Direct check for video_versions array (Meta/IG Stories & Reels official MP4)
     if (Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
       for (const v of obj.video_versions) {
         if (v && v.url && typeof v.url === 'string' && !isAudioOnlyUrl(v.url)) {
@@ -189,7 +188,6 @@
       }
     }
 
-    // 2. Direct check for progressive_url or video_url keys
     if (obj.progressive_url && typeof obj.progressive_url === 'string') {
       return cleanVideoUrl(obj.progressive_url);
     }
@@ -197,7 +195,6 @@
       return cleanVideoUrl(obj.video_url);
     }
 
-    // 3. Safe recursive key traversal (skipping circular keys)
     try {
       const keys = Object.keys(obj);
       for (const key of keys) {
@@ -243,10 +240,30 @@
     return null;
   }
 
-  // Extract recent video MP4 URL from Performance network resource logs
+  // Fetch Instagram progressive MP4 with audio via internal API query
+  async function fetchInstagramProgressiveVideo(shortcode) {
+    if (!shortcode) return null;
+    try {
+      const apiUrl = `https://www.instagram.com/p/${shortcode}/?__a=1&__d=dis`;
+      const res = await fetch(apiUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      if (res.ok) {
+        const data = await res.json();
+        const items = data?.graphql?.shortcode_media || data?.items?.[0];
+        if (items && items.video_versions && items.video_versions.length > 0) {
+          return cleanVideoUrl(items.video_versions[0].url);
+        }
+      }
+    } catch (e) {
+      console.warn('[Social Media Downloader] IG info API lookup skipped:', e);
+    }
+    return null;
+  }
+
+  // Extract recent video MP4 URL from Performance network resource logs (prioritizes combined progressive stream)
   function getNetworkVideoUrl() {
     try {
       const entries = performance.getEntriesByType('resource');
+      let progressiveUrl = null;
       let fallbackVideoUrl = null;
 
       for (let i = entries.length - 1; i >= 0; i--) {
@@ -255,15 +272,18 @@
 
         if ((name.includes('.mp4') || name.includes('/v/t51.') || name.includes('/v/t64.')) && (name.includes('cdninstagram.com') || name.includes('fbcdn.net') || name.includes('twimg.com'))) {
           const clean = cleanVideoUrl(name);
-          if (name.includes('progressive') || name.includes('_n.mp4')) {
-            return clean;
+          
+          // Progressive MP4 (Video + Audio combined) contains _n.mp4 or t51.2885-15 or progressive
+          if (name.includes('_n.mp4') || name.includes('progressive') || name.includes('t51.2885-15')) {
+            progressiveUrl = clean;
+            break;
           }
           if (!fallbackVideoUrl) {
             fallbackVideoUrl = clean;
           }
         }
       }
-      return fallbackVideoUrl;
+      return progressiveUrl || fallbackVideoUrl;
     } catch (e) {
       console.warn('[Social Media Downloader] Performance entry lookup error:', e);
     }
@@ -356,12 +376,21 @@
   }
 
   // Video Source Resolver (Prioritizes Combined Video+Audio Progressive Stream)
-  function getVideoUrl(videoElement) {
+  async function getVideoUrl(videoElement) {
     // 1. Extract combined progressive MP4 URL from React Fiber props (Highest Priority)
     const reactUrl = getUrlFromReactFiber(videoElement);
     if (reactUrl && !isAudioOnlyUrl(reactUrl)) return reactUrl;
 
-    // 2. Direct src if not blob and not audio-only
+    // 2. Query Instagram GraphQL / info API for post/reel shortcode
+    if (isInstagram) {
+      const match = window.location.pathname.match(/\/(p|reel|stories\/[^\/]+)\/([A-Za-z0-9_-]+)/);
+      if (match && match[2]) {
+        const apiUrl = await fetchInstagramProgressiveVideo(match[2]);
+        if (apiUrl) return apiUrl;
+      }
+    }
+
+    // 3. Direct src if not blob and not audio-only
     if (videoElement.src && !videoElement.src.startsWith('blob:') && !isAudioOnlyUrl(videoElement.src)) {
       return cleanVideoUrl(videoElement.src);
     }
@@ -369,7 +398,7 @@
       return cleanVideoUrl(videoElement.currentSrc);
     }
 
-    // 3. Check <source> tags
+    // 4. Check <source> tags
     const sources = videoElement.querySelectorAll('source');
     for (const source of sources) {
       if (source.src && !source.src.startsWith('blob:') && !isAudioOnlyUrl(source.src)) {
@@ -377,7 +406,7 @@
       }
     }
 
-    // 4. Fallback to Performance resource entries for MP4 (excluding audio-only)
+    // 5. Fallback to Performance resource entries for MP4 (prioritizing progressive combined streams)
     const networkUrl = getNetworkVideoUrl();
     if (networkUrl) return networkUrl;
 
@@ -386,7 +415,7 @@
 
   // Resolve media URL
   async function resolveMediaUrl(element, type) {
-    let url = type === 'video' ? getVideoUrl(element) : getHighResImageUrl(element);
+    let url = type === 'video' ? await getVideoUrl(element) : getHighResImageUrl(element);
     if (!url) return null;
 
     if (url.startsWith('blob:')) {
