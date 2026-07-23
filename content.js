@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.3.2 Combined Progressive Stream Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.3.3 Non-Circular React Fiber Walker Version)
 
 (function () {
   'use strict';
@@ -43,7 +43,7 @@
   }
 
   console.log(
-    '%c[Social Media Downloader v1.3.2] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.3.3] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -174,45 +174,65 @@
     return true;
   }
 
-  // Extract full unfragmented COMBINED Video+Audio MP4 URL from React Fiber props (Meta/IG/Threads SPA)
+  // Safe Non-Circular Object Walker for React Fiber Trees
+  function findVideoUrlInObject(obj, depth = 0, visited = new WeakSet()) {
+    if (!obj || depth > 8 || typeof obj !== 'object') return null;
+    if (visited.has(obj)) return null;
+    visited.add(obj);
+
+    // 1. Direct check for video_versions array (Meta/IG Stories & Reels official MP4)
+    if (Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
+      for (const v of obj.video_versions) {
+        if (v && v.url && typeof v.url === 'string' && !isAudioOnlyUrl(v.url)) {
+          return cleanVideoUrl(v.url);
+        }
+      }
+    }
+
+    // 2. Direct check for progressive_url or video_url keys
+    if (obj.progressive_url && typeof obj.progressive_url === 'string') {
+      return cleanVideoUrl(obj.progressive_url);
+    }
+    if (obj.video_url && typeof obj.video_url === 'string') {
+      return cleanVideoUrl(obj.video_url);
+    }
+
+    // 3. Safe recursive key traversal (skipping circular keys)
+    try {
+      const keys = Object.keys(obj);
+      for (const key of keys) {
+        if (key === 'return' || key === 'child' || key === 'sibling' || key === 'stateNode' || key === 'alternate') {
+          continue;
+        }
+        const val = obj[key];
+        if (val && typeof val === 'object') {
+          const found = findVideoUrlInObject(val, depth + 1, visited);
+          if (found) return found;
+        } else if (typeof val === 'string' && val.startsWith('http') && val.includes('.mp4') && !isAudioOnlyUrl(val)) {
+          if (key.includes('video') || key.includes('url') || key.includes('src')) {
+            return cleanVideoUrl(val);
+          }
+        }
+      }
+    } catch (e) {}
+
+    return null;
+  }
+
+  // Extract full unfragmented COMBINED Video+Audio MP4 URL from React Fiber props
   function getUrlFromReactFiber(element) {
     let curr = element;
     let depth = 0;
+    const visited = new WeakSet();
+
     while (curr && depth < 10 && curr !== document.body) {
       for (const key in curr) {
         if (key.startsWith('__reactProps$') || key.startsWith('__reactFiber$')) {
           try {
             const val = curr[key];
-            const jsonStr = JSON.stringify(val);
-            
-            // 1. Highest Priority: video_versions array containing combined progressive video+audio
-            const storyMatch = jsonStr.match(/"video_versions"\s*:\s*\[\s*\{[^}]*"url"\s*:\s*"([^"]+)"/i);
-            if (storyMatch && storyMatch[1]) {
-              let storyUrl = storyMatch[1].replace(/\\/g, '');
-              try { storyUrl = JSON.parse(`"${storyUrl}"`); } catch(e) {}
-              if (!isAudioOnlyUrl(storyUrl)) {
-                return cleanVideoUrl(storyUrl);
-              }
-            }
-
-            // 2. Search for progressive_url or video_url keys
-            const progMatch = jsonStr.match(/"(progressive_url|video_url)"\s*:\s*"([^"]+)"/i);
-            if (progMatch && progMatch[2]) {
-              let progUrl = progMatch[2].replace(/\\/g, '');
-              try { progUrl = JSON.parse(`"${progUrl}"`); } catch(e) {}
-              if (!isAudioOnlyUrl(progUrl)) {
-                return cleanVideoUrl(progUrl);
-              }
-            }
-
-            // 3. Fallback general mp4 regex search
-            const match = jsonStr.match(/https?:\\?\/\\?\/[^\s"']+(\.mp4|\/v\/t51|\/v\/t64)[^\s"']*/i);
-            if (match && match[0]) {
-              let cleanUrl = match[0].replace(/\\/g, '');
-              try { cleanUrl = JSON.parse(`"${cleanUrl}"`); } catch(e) {}
-              if (!isAudioOnlyUrl(cleanUrl)) {
-                return cleanVideoUrl(cleanUrl);
-              }
+            const foundUrl = findVideoUrlInObject(val, 0, visited);
+            if (foundUrl) {
+              return foundUrl;
             }
           } catch (e) {}
         }
@@ -235,7 +255,6 @@
 
         if ((name.includes('.mp4') || name.includes('/v/t51.') || name.includes('/v/t64.')) && (name.includes('cdninstagram.com') || name.includes('fbcdn.net') || name.includes('twimg.com'))) {
           const clean = cleanVideoUrl(name);
-          // Prefer URLs with progressive tag or _n.mp4 over dash_video
           if (name.includes('progressive') || name.includes('_n.mp4')) {
             return clean;
           }
