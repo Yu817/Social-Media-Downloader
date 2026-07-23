@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (Clean Direct Video Stream Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.2.3 Unfragmented Stream Version)
 
 (function () {
   'use strict';
@@ -33,7 +33,7 @@
   });
 
   console.log(
-    '%c[Social Media Downloader] Content script active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.2.3] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -58,27 +58,44 @@
     </svg>
   `;
 
-  // Extract MP4 URL from React Fiber props (Meta/IG/Threads SPA)
+  // Clean video URL by removing byte range chunk parameters
+  function cleanVideoUrl(url) {
+    if (!url) return null;
+    let clean = url;
+    // Strip Instagram DASH byte range parameters that fragment MP4 files
+    clean = clean.replace(/([?&])bytestart=\d+&?/g, '$1');
+    clean = clean.replace(/([?&])byteend=\d+&?/g, '$1');
+    clean = clean.replace(/[?&]$/, '');
+    return clean;
+  }
+
+  // Extract full unfragmented MP4 URL from React Fiber props (Meta/IG/Threads SPA)
   function getUrlFromReactFiber(element) {
     let curr = element;
     let depth = 0;
-    while (curr && depth < 7 && curr !== document.body) {
+    while (curr && depth < 8 && curr !== document.body) {
       for (const key in curr) {
         if (key.startsWith('__reactProps$') || key.startsWith('__reactFiber$')) {
           try {
             const val = curr[key];
             const jsonStr = JSON.stringify(val);
+            
+            // Search for video_versions array in IG Stories
+            const storyMatch = jsonStr.match(/"video_versions"\s*:\s*\[\s*\{[^}]*"url"\s*:\s*"([^"]+)"/i);
+            if (storyMatch && storyMatch[1]) {
+              let storyUrl = storyMatch[1].replace(/\\/g, '');
+              try { storyUrl = JSON.parse(`"${storyUrl}"`); } catch(e) {}
+              return cleanVideoUrl(storyUrl);
+            }
+
+            // General mp4 regex search
             const match = jsonStr.match(/https?:\\?\/\\?\/[^\s"']+(\.mp4|\/v\/t51|\/v\/t64)[^\s"']*/i);
             if (match && match[0]) {
               let cleanUrl = match[0].replace(/\\/g, '');
-              try {
-                cleanUrl = JSON.parse(`"${cleanUrl}"`);
-              } catch (e) {}
-              return cleanUrl;
+              try { cleanUrl = JSON.parse(`"${cleanUrl}"`); } catch(e) {}
+              return cleanVideoUrl(cleanUrl);
             }
-          } catch (e) {
-            // Ignore circular JSON parsing errors
-          }
+          } catch (e) {}
         }
       }
       curr = curr.parentElement;
@@ -94,7 +111,7 @@
       for (let i = entries.length - 1; i >= 0; i--) {
         const name = entries[i].name;
         if ((name.includes('.mp4') || name.includes('/v/t51.') || name.includes('/v/t64.')) && (name.includes('cdninstagram.com') || name.includes('fbcdn.net') || name.includes('twimg.com'))) {
-          return name;
+          return cleanVideoUrl(name);
         }
       }
     } catch (e) {
@@ -210,27 +227,27 @@
     return rawSrc;
   }
 
-  // Video Source Resolver (Prioritizes direct MP4 URLs over blob MSE URLs)
+  // Video Source Resolver (Prioritizes complete unfragmented MP4 URLs)
   function getVideoUrl(videoElement) {
-    // 1. Direct src if not blob
-    if (videoElement.src && !videoElement.src.startsWith('blob:')) return videoElement.src;
-    if (videoElement.currentSrc && !videoElement.currentSrc.startsWith('blob:')) return videoElement.currentSrc;
-
-    // 2. Check <source> tags
-    const sources = videoElement.querySelectorAll('source');
-    for (const source of sources) {
-      if (source.src && !source.src.startsWith('blob:')) return source.src;
-    }
-
-    // 3. Extract original MP4 URL from React Fiber props (Crucial for IG Stories)
+    // 1. Extract original MP4 URL from React Fiber props (Highest Priority for IG Stories)
     const reactUrl = getUrlFromReactFiber(videoElement);
     if (reactUrl) return reactUrl;
+
+    // 2. Direct src if not blob
+    if (videoElement.src && !videoElement.src.startsWith('blob:')) return cleanVideoUrl(videoElement.src);
+    if (videoElement.currentSrc && !videoElement.currentSrc.startsWith('blob:')) return cleanVideoUrl(videoElement.currentSrc);
+
+    // 3. Check <source> tags
+    const sources = videoElement.querySelectorAll('source');
+    for (const source of sources) {
+      if (source.src && !source.src.startsWith('blob:')) return cleanVideoUrl(source.src);
+    }
 
     // 4. Fallback to Performance resource entries for MP4
     const networkUrl = getNetworkVideoUrl();
     if (networkUrl) return networkUrl;
 
-    return videoElement.currentSrc || videoElement.src || null;
+    return cleanVideoUrl(videoElement.currentSrc || videoElement.src || null);
   }
 
   // Resolve media URL
@@ -238,7 +255,6 @@
     let url = type === 'video' ? getVideoUrl(element) : getHighResImageUrl(element);
     if (!url) return null;
 
-    // Fallback if still blob
     if (url.startsWith('blob:')) {
       const netFallback = getNetworkVideoUrl();
       if (netFallback) {
