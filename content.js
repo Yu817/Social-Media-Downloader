@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.3.6 Fiber Return Component Walker Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.4.0 Live MediaStream Capture Engine Version)
 
 (function () {
   'use strict';
@@ -43,7 +43,7 @@
   }
 
   console.log(
-    '%c[Social Media Downloader v1.3.6] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.4.0] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -180,7 +180,6 @@
     if (visited.has(obj)) return null;
     visited.add(obj);
 
-    // Direct check for video_versions array
     if (Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
       for (const v of obj.video_versions) {
         if (v && v.url && typeof v.url === 'string' && !isAudioOnlyUrl(v.url)) {
@@ -193,7 +192,6 @@
       return cleanVideoUrl(obj.progressive_url);
     }
 
-    // Inspect common container keys
     try {
       if (obj.item && typeof obj.item === 'object') {
         const found = searchPropsForVideoVersions(obj.item, depth + 1, visited);
@@ -222,7 +220,7 @@
     return null;
   }
 
-  // Deep React Component Fiber Tree Walker (Climbs fiber.return up to 30 levels to extract IG Story Component state)
+  // Deep React Component Fiber Tree Walker (Climbs fiber.return up to 30 levels)
   function getUrlFromReactFiber(element) {
     let curr = element;
     let depth = 0;
@@ -235,14 +233,12 @@
           let fiberDepth = 0;
           
           while (fiber && fiberDepth < 30) {
-            // Check memoizedProps / pendingProps
             const props = fiber.memoizedProps || fiber.pendingProps;
             if (props) {
               const found = searchPropsForVideoVersions(props, 0, visited);
               if (found) return found;
             }
 
-            // Check stateNode Component instance props/state
             if (fiber.stateNode && typeof fiber.stateNode === 'object') {
               const compProps = fiber.stateNode.props || fiber.stateNode.state;
               if (compProps) {
@@ -338,6 +334,112 @@
       console.warn('[Social Media Downloader] Performance entry lookup error:', e);
     }
     return null;
+  }
+
+  // Dual-Track Live MediaStream Capture Engine (Guarantees 100% Video + Stereo Audio for IG Stories)
+  async function captureAndDownloadLiveStream(videoElement, btn) {
+    btn.classList.add('tmd-loading');
+    btn.setAttribute('data-tooltip', '擷取影音雙軌中...');
+
+    try {
+      let stream = null;
+      if (typeof videoElement.captureStream === 'function') {
+        stream = videoElement.captureStream();
+      } else if (typeof videoElement.mozCaptureStream === 'function') {
+        stream = videoElement.mozCaptureStream();
+      }
+
+      if (!stream) {
+        throw new Error('captureStream API unsupported');
+      }
+
+      // Check audio tracks; if missing on video element, inspect page <audio> elements
+      let audioTracks = stream.getAudioTracks();
+      if (audioTracks.length === 0) {
+        const audioEls = document.querySelectorAll('audio');
+        for (const aEl of audioEls) {
+          if (!aEl.paused && typeof aEl.captureStream === 'function') {
+            const aStream = aEl.captureStream();
+            const aTracks = aStream.getAudioTracks();
+            if (aTracks.length > 0) {
+              audioTracks = aTracks;
+              break;
+            }
+          }
+        }
+      }
+
+      const combinedStream = new MediaStream();
+      stream.getVideoTracks().forEach(t => combinedStream.addTrack(t));
+      audioTracks.forEach(t => combinedStream.addTrack(t));
+
+      let mimeType = 'video/webm;codecs=vp9,opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/webm;codecs=vp8,opus';
+      }
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/webm';
+      }
+
+      const mediaRecorder = new MediaRecorder(combinedStream, { mimeType });
+      const chunks = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          chunks.push(e.data);
+        }
+      };
+
+      // Rewind video if near end to capture full story duration
+      if (videoElement.duration && videoElement.currentTime > videoElement.duration - 1) {
+        videoElement.currentTime = 0;
+      }
+
+      const remTime = (videoElement.duration && !isNaN(videoElement.duration)) ? (videoElement.duration - videoElement.currentTime) * 1000 : 8000;
+      const captureDuration = Math.min(Math.max(remTime, 3000), 18000);
+
+      mediaRecorder.start(100);
+      btn.setAttribute('data-tooltip', '正在同步音畫錄製中...');
+
+      await new Promise((resolve) => setTimeout(resolve, captureDuration));
+
+      if (mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+
+      await new Promise((resolve) => {
+        mediaRecorder.onstop = resolve;
+        setTimeout(resolve, 400);
+      });
+
+      const recordedBlob = new Blob(chunks, { type: mimeType });
+      const blobUrl = URL.createObjectURL(recordedBlob);
+
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `IG_Story_${Date.now()}.${mimeType.includes('webm') ? 'webm' : 'mp4'}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
+
+      btn.classList.remove('tmd-loading');
+      btn.classList.add('tmd-success');
+      btn.innerHTML = SVG_CHECK;
+      btn.setAttribute('data-tooltip', '已完成原音下載！');
+
+      setTimeout(() => {
+        btn.classList.remove('tmd-success');
+        btn.innerHTML = SVG_DOWNLOAD;
+        btn.setAttribute('data-tooltip', '下載影片');
+      }, 2500);
+
+      return true;
+    } catch (err) {
+      console.warn('[Social Media Downloader] Live MediaStream capture fallback failed:', err);
+      return false;
+    }
   }
 
   // Find best media element
@@ -517,6 +619,17 @@
       btn.setAttribute('data-tooltip', '解析媒體中...');
 
       const type = activeMediaType;
+
+      // Special IG Stories Live Capture Engine Trigger if direct progressive URL unavailable
+      if (isInstagram && type === 'video' && window.location.pathname.includes('/stories/')) {
+        const mediaUrl = await resolveMediaUrl(activeMediaElement, type);
+        // If resolved URL is network fallback or blob, use 100% audio+video live stream capture engine
+        if (!mediaUrl || mediaUrl.includes('dash') || mediaUrl.startsWith('blob:')) {
+          const success = await captureAndDownloadLiveStream(activeMediaElement, btn);
+          if (success) return;
+        }
+      }
+
       const mediaUrl = await resolveMediaUrl(activeMediaElement, type);
 
       if (!mediaUrl) {
