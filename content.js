@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (Smart Avatar Filter Version)
+// Social Media Downloader Content Script - Multi-Platform (Instagram Stories & React Fiber Fix)
 
 (function () {
   'use strict';
@@ -58,6 +58,52 @@
     </svg>
   `;
 
+  // Extract MP4 URL from React Fiber props (Meta/IG/Threads SPA)
+  function getUrlFromReactFiber(element) {
+    let curr = element;
+    let depth = 0;
+    while (curr && depth < 6 && curr !== document.body) {
+      for (const key in curr) {
+        if (key.startsWith('__reactProps$') || key.startsWith('__reactFiber$')) {
+          try {
+            const val = curr[key];
+            const jsonStr = JSON.stringify(val);
+            // Search for direct mp4 links
+            const match = jsonStr.match(/https?:\\?\/\\?\/[^\s"']+\.mp4[^\s"']*/i);
+            if (match && match[0]) {
+              let cleanUrl = match[0].replace(/\\/g, '');
+              try {
+                cleanUrl = JSON.parse(`"${cleanUrl}"`);
+              } catch (e) {}
+              return cleanUrl;
+            }
+          } catch (e) {
+            // Ignore circular JSON parsing errors
+          }
+        }
+      }
+      curr = curr.parentElement;
+      depth++;
+    }
+    return null;
+  }
+
+  // Extract recent video MP4 URL from Performance network resource logs
+  function getNetworkVideoUrl() {
+    try {
+      const entries = performance.getEntriesByType('resource');
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const name = entries[i].name;
+        if (name.includes('.mp4') && (name.includes('cdninstagram.com') || name.includes('fbcdn.net') || name.includes('twimg.com'))) {
+          return name;
+        }
+      }
+    } catch (e) {
+      console.warn('[Social Media Downloader] Performance entry lookup error:', e);
+    }
+    return null;
+  }
+
   // Helper to identify avatar images
   function isAvatarImage(img) {
     const rect = img.getBoundingClientRect();
@@ -79,9 +125,8 @@
     return false;
   }
 
-  // Find best media element (picks largest post photo/video, ignores avatars)
+  // Find best media element
   function findBestMediaElement(target) {
-    // If target itself is valid image/video
     if (target.tagName === 'IMG' && !isAvatarImage(target)) {
       return { media: target, type: 'image' };
     }
@@ -93,7 +138,6 @@
     let depth = 0;
 
     while (parent && depth < 5 && parent !== document.body) {
-      // 1. Check for Videos
       const videos = parent.querySelectorAll('video');
       for (const v of videos) {
         const rect = v.getBoundingClientRect();
@@ -102,7 +146,6 @@
         }
       }
 
-      // 2. Check for Images (pick largest non-avatar image)
       const images = parent.querySelectorAll('img');
       let bestImg = null;
       let maxArea = 0;
@@ -133,7 +176,6 @@
   function getHighResImageUrl(imgElement) {
     let rawSrc = imgElement.currentSrc || imgElement.src || '';
 
-    // Twitter / X Original Quality Transformer
     if (isTwitter && rawSrc.includes('twimg.com')) {
       if (rawSrc.includes('name=')) {
         return rawSrc.replace(/name=\w+/, 'name=orig');
@@ -142,12 +184,10 @@
       }
     }
 
-    // Pinterest Original Image Transformer
     if (isPinterest && rawSrc.includes('pinimg.com')) {
       return rawSrc.replace(/\/(236x|474x|564x|736x)\//, '/originals/');
     }
 
-    // Parse srcset for Threads, Instagram, Facebook, and general sites
     const srcset = imgElement.getAttribute('srcset');
     if (srcset) {
       const candidates = srcset.split(',').map(item => {
@@ -171,15 +211,27 @@
     return rawSrc;
   }
 
-  // Video Source Resolver
+  // Video Source Resolver (Prioritizes direct MP4 URLs over blob MSE URLs)
   function getVideoUrl(videoElement) {
-    if (videoElement.currentSrc) return videoElement.currentSrc;
+    // 1. Direct src if not blob
     if (videoElement.src && !videoElement.src.startsWith('blob:')) return videoElement.src;
+    if (videoElement.currentSrc && !videoElement.currentSrc.startsWith('blob:')) return videoElement.currentSrc;
+
+    // 2. Check <source> tags
     const sources = videoElement.querySelectorAll('source');
     for (const source of sources) {
       if (source.src && !source.src.startsWith('blob:')) return source.src;
     }
-    return videoElement.src || null;
+
+    // 3. Extract original MP4 URL from React Fiber props (Crucial for IG Stories)
+    const reactUrl = getUrlFromReactFiber(videoElement);
+    if (reactUrl) return reactUrl;
+
+    // 4. Fallback to Performance resource entries for MP4
+    const networkUrl = getNetworkVideoUrl();
+    if (networkUrl) return networkUrl;
+
+    return videoElement.currentSrc || videoElement.src || null;
   }
 
   // Resolve media URL
@@ -187,19 +239,15 @@
     let url = type === 'video' ? getVideoUrl(element) : getHighResImageUrl(element);
     if (!url) return null;
 
+    // If still a blob URL, attempt Performance entry fallback to avoid net::ERR_FILE_NOT_FOUND
     if (url.startsWith('blob:')) {
-      try {
-        const response = await fetch(url);
-        const blob = await response.blob();
-        return new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result);
-          reader.readAsDataURL(blob);
-        });
-      } catch (e) {
-        console.warn('[Social Media Downloader] Blob fetch fallback:', e);
+      const netFallback = getNetworkVideoUrl();
+      if (netFallback) {
+        console.log('[Social Media Downloader] Replaced blob URL with network MP4 fallback:', netFallback);
+        return netFallback;
       }
     }
+
     return url;
   }
 
