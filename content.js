@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.3.0 Silent Direct Download Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.3.1 Loaded-Only Hover Version)
 
 (function () {
   'use strict';
@@ -43,7 +43,7 @@
   }
 
   console.log(
-    '%c[Social Media Downloader v1.3.0] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.3.1] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -150,6 +150,30 @@
     return false;
   }
 
+  // Verify image is fully loaded and rendered
+  function isImageReady(img) {
+    if (!img) return false;
+    if (!img.complete) return false;
+    if (!img.naturalWidth || img.naturalWidth < 80 || !img.naturalHeight || img.naturalHeight < 80) {
+      return false;
+    }
+    const rect = img.getBoundingClientRect();
+    if (rect.width < 80 || rect.height < 80) return false;
+    return true;
+  }
+
+  // Verify video is loaded and has video metadata/frames
+  function isVideoReady(video) {
+    if (!video) return false;
+    if (video.readyState < 1 && !video.videoWidth) return false;
+    const width = video.videoWidth || video.width || 0;
+    const height = video.videoHeight || video.height || 0;
+    if (width < 80 || height < 80) return false;
+    const rect = video.getBoundingClientRect();
+    if (rect.width < 80 || rect.height < 80) return false;
+    return true;
+  }
+
   // Extract full unfragmented MP4 URL from React Fiber props (Meta/IG/Threads SPA)
   function getUrlFromReactFiber(element) {
     let curr = element;
@@ -214,12 +238,12 @@
     return null;
   }
 
-  // Find best media element
+  // Find best media element (only matches fully loaded media)
   function findBestMediaElement(target) {
-    if (target.tagName === 'IMG' && !isAvatarImage(target)) {
+    if (target.tagName === 'IMG' && !isAvatarImage(target) && isImageReady(target)) {
       return { media: target, type: 'image' };
     }
-    if (target.tagName === 'VIDEO') {
+    if (target.tagName === 'VIDEO' && isVideoReady(target)) {
       return { media: target, type: 'video' };
     }
 
@@ -229,8 +253,7 @@
     while (parent && depth < 5 && parent !== document.body) {
       const videos = parent.querySelectorAll('video');
       for (const v of videos) {
-        const rect = v.getBoundingClientRect();
-        if (rect.width >= 90 && rect.height >= 90) {
+        if (isVideoReady(v)) {
           return { media: v, type: 'video' };
         }
       }
@@ -240,10 +263,10 @@
       let maxArea = 0;
 
       for (const img of images) {
-        if (!isAvatarImage(img)) {
+        if (!isAvatarImage(img) && isImageReady(img)) {
           const rect = img.getBoundingClientRect();
           const area = rect.width * rect.height;
-          if (rect.width >= 90 && rect.height >= 90 && area > maxArea) {
+          if (area > maxArea) {
             maxArea = area;
             bestImg = img;
           }
@@ -426,12 +449,11 @@
     return btn;
   }
 
-  // Silent Direct Download Helper (No new tab, no window popup!)
+  // Silent Direct Download Helper
   async function triggerSilentDirectDownload(mediaUrl, type, ext, btn) {
     btn.classList.remove('tmd-loading');
 
     try {
-      // Fetch blob in content script for same-origin Blob URL download (NO _blank target!)
       const res = await fetch(mediaUrl);
       const blob = await res.blob();
       const blobUrl = URL.createObjectURL(blob);
@@ -439,7 +461,6 @@
       const a = document.createElement('a');
       a.href = blobUrl;
       a.download = `Social_${type}_${Date.now()}.${ext}`;
-      // NO target="_blank" to ensure ZERO new tab opening!
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -496,7 +517,7 @@
     }
   }
 
-  // Global mousemove listener
+  // Global mousemove listener with strict hover bounds and readiness checks
   let hoverCheckTimer = null;
   document.addEventListener('mousemove', (e) => {
     if (!isExtensionEnabled) {
@@ -511,14 +532,25 @@
 
     const result = findBestMediaElement(target);
     if (result && result.media) {
-      updateFloatingButtonPosition(result.media, result.type);
-      return;
+      const rect = result.media.getBoundingClientRect();
+      const padding = 15;
+
+      // Verify mouse cursor is strictly within the loaded media element bounds
+      if (
+        e.clientX >= rect.left - padding &&
+        e.clientX <= rect.right + padding &&
+        e.clientY >= rect.top - padding &&
+        e.clientY <= rect.bottom + padding
+      ) {
+        updateFloatingButtonPosition(result.media, result.type);
+        return;
+      }
     }
 
     if (hoverCheckTimer) clearTimeout(hoverCheckTimer);
     hoverCheckTimer = setTimeout(() => {
       hideFloatingButton();
-    }, 400);
+    }, 300);
   }, { passive: true });
 
   window.addEventListener('scroll', () => {
