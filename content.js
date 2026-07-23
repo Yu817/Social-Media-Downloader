@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (Instagram Stories & React Fiber Fix)
+// Social Media Downloader Content Script - Multi-Platform (Clean Direct Video Stream Version)
 
 (function () {
   'use strict';
@@ -62,14 +62,13 @@
   function getUrlFromReactFiber(element) {
     let curr = element;
     let depth = 0;
-    while (curr && depth < 6 && curr !== document.body) {
+    while (curr && depth < 7 && curr !== document.body) {
       for (const key in curr) {
         if (key.startsWith('__reactProps$') || key.startsWith('__reactFiber$')) {
           try {
             const val = curr[key];
             const jsonStr = JSON.stringify(val);
-            // Search for direct mp4 links
-            const match = jsonStr.match(/https?:\\?\/\\?\/[^\s"']+\.mp4[^\s"']*/i);
+            const match = jsonStr.match(/https?:\\?\/\\?\/[^\s"']+(\.mp4|\/v\/t51|\/v\/t64)[^\s"']*/i);
             if (match && match[0]) {
               let cleanUrl = match[0].replace(/\\/g, '');
               try {
@@ -94,7 +93,7 @@
       const entries = performance.getEntriesByType('resource');
       for (let i = entries.length - 1; i >= 0; i--) {
         const name = entries[i].name;
-        if (name.includes('.mp4') && (name.includes('cdninstagram.com') || name.includes('fbcdn.net') || name.includes('twimg.com'))) {
+        if ((name.includes('.mp4') || name.includes('/v/t51.') || name.includes('/v/t64.')) && (name.includes('cdninstagram.com') || name.includes('fbcdn.net') || name.includes('twimg.com'))) {
           return name;
         }
       }
@@ -239,7 +238,7 @@
     let url = type === 'video' ? getVideoUrl(element) : getHighResImageUrl(element);
     if (!url) return null;
 
-    // If still a blob URL, attempt Performance entry fallback to avoid net::ERR_FILE_NOT_FOUND
+    // Fallback if still blob
     if (url.startsWith('blob:')) {
       const netFallback = getNetworkVideoUrl();
       if (netFallback) {
