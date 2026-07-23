@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform Support (with Instagram Stories fix)
+// Social Media Downloader Content Script - Multi-Platform (Smart Avatar Filter Version)
 
 (function () {
   'use strict';
@@ -58,6 +58,77 @@
     </svg>
   `;
 
+  // Helper to identify avatar images
+  function isAvatarImage(img) {
+    const rect = img.getBoundingClientRect();
+    if (rect.width < 85 || rect.height < 85) return true;
+
+    const alt = (img.alt || '').toLowerCase();
+    if (alt.includes('profile picture') || alt.includes('頭像') || alt.includes('大頭貼') || alt.includes('avatar') || alt.includes('profile photo')) {
+      return true;
+    }
+
+    if (img.closest('header')) return true;
+
+    const parentAnchor = img.closest('a');
+    if (parentAnchor) {
+      const aRect = parentAnchor.getBoundingClientRect();
+      if (aRect.width < 85 || aRect.height < 85) return true;
+    }
+
+    return false;
+  }
+
+  // Find best media element (picks largest post photo/video, ignores avatars)
+  function findBestMediaElement(target) {
+    // If target itself is valid image/video
+    if (target.tagName === 'IMG' && !isAvatarImage(target)) {
+      return { media: target, type: 'image' };
+    }
+    if (target.tagName === 'VIDEO') {
+      return { media: target, type: 'video' };
+    }
+
+    let parent = target.closest ? target.closest('div, li, article, figure, section') : null;
+    let depth = 0;
+
+    while (parent && depth < 5 && parent !== document.body) {
+      // 1. Check for Videos
+      const videos = parent.querySelectorAll('video');
+      for (const v of videos) {
+        const rect = v.getBoundingClientRect();
+        if (rect.width >= 90 && rect.height >= 90) {
+          return { media: v, type: 'video' };
+        }
+      }
+
+      // 2. Check for Images (pick largest non-avatar image)
+      const images = parent.querySelectorAll('img');
+      let bestImg = null;
+      let maxArea = 0;
+
+      for (const img of images) {
+        if (!isAvatarImage(img)) {
+          const rect = img.getBoundingClientRect();
+          const area = rect.width * rect.height;
+          if (rect.width >= 90 && rect.height >= 90 && area > maxArea) {
+            maxArea = area;
+            bestImg = img;
+          }
+        }
+      }
+
+      if (bestImg) {
+        return { media: bestImg, type: 'image' };
+      }
+
+      parent = parent.parentElement;
+      depth++;
+    }
+
+    return null;
+  }
+
   // Platform-Specific High-Resolution Image Resolver
   function getHighResImageUrl(imgElement) {
     let rawSrc = imgElement.currentSrc || imgElement.src || '';
@@ -100,7 +171,7 @@
     return rawSrc;
   }
 
-  // Video Source Resolver (prioritizes currentSrc for Instagram Stories & HTML5 players)
+  // Video Source Resolver
   function getVideoUrl(videoElement) {
     if (videoElement.currentSrc) return videoElement.currentSrc;
     if (videoElement.src && !videoElement.src.startsWith('blob:')) return videoElement.src;
@@ -111,7 +182,7 @@
     return videoElement.src || null;
   }
 
-  // Resolve media URL to downloadable string
+  // Resolve media URL
   async function resolveMediaUrl(element, type) {
     let url = type === 'video' ? getVideoUrl(element) : getHighResImageUrl(element);
     if (!url) return null;
@@ -260,42 +331,10 @@
 
     if (target.closest('.tmd-download-btn')) return;
 
-    let media = null;
-    let type = 'image';
-
-    if (target.tagName === 'IMG') {
-      media = target;
-      type = 'image';
-    } else if (target.tagName === 'VIDEO') {
-      media = target;
-      type = 'video';
-    } else {
-      const parentMedia = target.closest('div, a, article, figure, section');
-      if (parentMedia) {
-        const img = parentMedia.querySelector('img');
-        const video = parentMedia.querySelector('video');
-        if (video) {
-          media = video;
-          type = 'video';
-        } else if (img) {
-          media = img;
-          type = 'image';
-        }
-      }
-    }
-
-    if (media) {
-      const rect = media.getBoundingClientRect();
-      const width = media.naturalWidth || media.videoWidth || rect.width;
-      const height = media.naturalHeight || media.videoHeight || rect.height;
-
-      if (width >= 80 && height >= 80 && rect.width >= 80 && rect.height >= 80) {
-        const alt = (media.alt || '').toLowerCase();
-        if (!alt.includes('profile picture') && !alt.includes('頭像') && !alt.includes('大頭貼') && !alt.includes('avatar')) {
-          updateFloatingButtonPosition(media, type);
-          return;
-        }
-      }
+    const result = findBestMediaElement(target);
+    if (result && result.media) {
+      updateFloatingButtonPosition(result.media, result.type);
+      return;
     }
 
     if (hoverCheckTimer) clearTimeout(hoverCheckTimer);
