@@ -363,14 +363,42 @@
     return null;
   }
 
+  // Resolve IG username to numeric user_id (needed for reels_media API)
+  async function resolveUserId(username) {
+    if (!username) return null;
+    try {
+      const res = await fetch(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`, {
+        credentials: 'include',
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-IG-App-ID': '936619743392459' }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const userId = data?.data?.user?.id || data?.user?.pk;
+        if (userId) {
+          console.log('[Social Media Downloader] Resolved user_id:', username, '->', userId);
+          return String(userId);
+        }
+      }
+    } catch (e) {
+      console.warn('[Social Media Downloader] Failed to resolve user_id for:', username, e);
+    }
+    return null;
+  }
+
   // Fetch the current IG story item via the API v1 endpoint (uses session cookie)
-  // storyId: the exact item ID from the URL (/stories/username/STORY_ID/)
-  // When storyId is provided, we match item.pk to guarantee we get the right story.
+  // The reels_media API requires a NUMERIC user_id, not a username string.
   async function fetchStoryItemFromApi(username, storyId) {
     if (!username) return null;
+
+    // Step 1: Resolve username -> numeric user_id
+    const userId = await resolveUserId(username);
+    if (!userId) {
+      console.warn('[Social Media Downloader] Could not resolve user_id, falling back to username');
+    }
+
+    const targetId = userId || username;
     const endpoints = [
-      `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${username}`,
-      `https://www.instagram.com/api/v1/feed/user/${username}/story/`,
+      `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${targetId}`,
     ];
     for (const url of endpoints) {
       try {
@@ -381,15 +409,13 @@
         if (!res.ok) continue;
         const data = await res.json();
 
-        // Collect all story items from either response format
+        // Collect all story items
         const allItems = [];
-        // reels_media format
         const reels = data?.reels || data?.reels_media || {};
         for (const key of Object.keys(reels)) {
           const items = reels[key]?.items;
           if (Array.isArray(items)) allItems.push(...items);
         }
-        // story feed format
         const items2 = data?.reel?.items || data?.items;
         if (Array.isArray(items2)) allItems.push(...items2);
 
@@ -546,11 +572,10 @@
   }
 
   // =========================================================================
-  // DIRECT-HOVER-ONLY MEDIA DETECTOR
-  // The button ONLY appears when the mouse is directly on an <img> or <video>
-  // that passes strict content checks. No parent-climbing allowed.
+  // MEDIA DETECTOR: Uses elementsFromPoint to find media under overlay divs
+  // This is critical for Threads/IG where overlay divs sit on top of images
   // =========================================================================
-  function findDirectMediaElement(target) {
+  function findDirectMediaElement(target, mouseX, mouseY) {
     // Case 1: mouse is directly ON a <video>
     if (target.tagName === 'VIDEO') {
       if (isContentVideo(target)) {
@@ -567,22 +592,25 @@
       return null;
     }
 
-    // Case 3: IG Stories special case — when hovering over the story player overlay div,
-    // find the active <video> or large <img> INSIDE that overlay only.
-    if (isInstagram && window.location.pathname.includes('/stories/')) {
-      // Look for video directly inside the immediate story player container (max 2 levels up)
-      let container = target.parentElement;
-      let depth = 0;
-      while (container && depth < 3 && container !== document.body) {
-        const videos = container.querySelectorAll('video');
-        for (const v of videos) {
-          if (isContentVideo(v)) {
-            return { media: v, type: 'video' };
+    // Case 3: Mouse is on an overlay div — use elementsFromPoint to find
+    // the <img> or <video> underneath the current mouse position.
+    // This fixes Threads/IG feed where overlay divs cover the actual media.
+    const rect = target.getBoundingClientRect();
+    if (rect.width > 150 && rect.height > 150) {
+      const px = mouseX || (rect.left + rect.width / 2);
+      const py = mouseY || (rect.top + rect.height / 2);
+      try {
+        const stack = document.elementsFromPoint(px, py);
+        for (const el of stack) {
+          if (el === target || el.classList.contains('tmd-download-btn')) continue;
+          if (el.tagName === 'VIDEO' && isContentVideo(el)) {
+            return { media: el, type: 'video' };
+          }
+          if (el.tagName === 'IMG' && !isAvatarOrIcon(el) && isContentImage(el)) {
+            return { media: el, type: 'image' };
           }
         }
-        container = container.parentElement;
-        depth++;
-      }
+      } catch (e) {}
     }
 
     return null;
@@ -899,7 +927,7 @@
     // Ignore hover events on the button itself
     if (target.closest && target.closest('.tmd-download-btn')) return;
 
-    const result = findDirectMediaElement(target);
+    const result = findDirectMediaElement(target, e.clientX, e.clientY);
     if (result && result.media) {
       updateFloatingButtonPosition(result.media, result.type);
       if (hoverCheckTimer) { clearTimeout(hoverCheckTimer); hoverCheckTimer = null; }
