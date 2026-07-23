@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.3.4 Dual-API & Progressive Video Priority Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.3.5 IG Stories Sound Fix Version)
 
 (function () {
   'use strict';
@@ -43,7 +43,7 @@
   }
 
   console.log(
-    '%c[Social Media Downloader v1.3.4] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.3.5] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -176,7 +176,7 @@
 
   // Safe Non-Circular Object Walker for React Fiber Trees
   function findVideoUrlInObject(obj, depth = 0, visited = new WeakSet()) {
-    if (!obj || depth > 8 || typeof obj !== 'object') return null;
+    if (!obj || depth > 10 || typeof obj !== 'object') return null;
     if (visited.has(obj)) return null;
     visited.add(obj);
 
@@ -216,31 +216,37 @@
     return null;
   }
 
-  // Extract full unfragmented COMBINED Video+Audio MP4 URL from React Fiber props
+  // Extract full unfragmented COMBINED Video+Audio MP4 URL from React Fiber props (Includes IG Story Dialog Containers)
   function getUrlFromReactFiber(element) {
-    let curr = element;
-    let depth = 0;
     const visited = new WeakSet();
 
-    while (curr && depth < 10 && curr !== document.body) {
-      for (const key in curr) {
-        if (key.startsWith('__reactProps$') || key.startsWith('__reactFiber$')) {
-          try {
-            const val = curr[key];
-            const foundUrl = findVideoUrlInObject(val, 0, visited);
-            if (foundUrl) {
-              return foundUrl;
-            }
-          } catch (e) {}
+    // Check both video element and parent story dialog container
+    const storyContainer = element.closest ? element.closest('section, div[role="dialog"], [role="presentation"], article, main') : null;
+    const targets = storyContainer ? [element, storyContainer] : [element];
+
+    for (const target of targets) {
+      let curr = target;
+      let depth = 0;
+      while (curr && depth < 15 && curr !== document.body) {
+        for (const key in curr) {
+          if (key.startsWith('__reactProps$') || key.startsWith('__reactFiber$')) {
+            try {
+              const val = curr[key];
+              const foundUrl = findVideoUrlInObject(val, 0, visited);
+              if (foundUrl) {
+                return foundUrl;
+              }
+            } catch (e) {}
+          }
         }
+        curr = curr.parentElement;
+        depth++;
       }
-      curr = curr.parentElement;
-      depth++;
     }
     return null;
   }
 
-  // Fetch Instagram progressive MP4 with audio via internal API query
+  // Fetch Instagram post/reel progressive MP4 via Info API
   async function fetchInstagramProgressiveVideo(shortcode) {
     if (!shortcode) return null;
     try {
@@ -259,6 +265,34 @@
     return null;
   }
 
+  // Fetch Instagram Story Reel Media API for Story video with full audio
+  async function fetchInstagramStoryVideo(storyId) {
+    if (!storyId) return null;
+    try {
+      const apiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${storyId}`;
+      const res = await fetch(apiUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      if (res.ok) {
+        const data = await res.json();
+        const reels = data?.reels || data?.reels_media;
+        if (reels) {
+          for (const key in reels) {
+            const items = reels[key]?.items;
+            if (Array.isArray(items)) {
+              for (const item of items) {
+                if (item.video_versions && item.video_versions.length > 0) {
+                  return cleanVideoUrl(item.video_versions[0].url);
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[Social Media Downloader] IG Story Reel API lookup skipped:', e);
+    }
+    return null;
+  }
+
   // Extract recent video MP4 URL from Performance network resource logs (prioritizes combined progressive stream)
   function getNetworkVideoUrl() {
     try {
@@ -273,7 +307,6 @@
         if ((name.includes('.mp4') || name.includes('/v/t51.') || name.includes('/v/t64.')) && (name.includes('cdninstagram.com') || name.includes('fbcdn.net') || name.includes('twimg.com'))) {
           const clean = cleanVideoUrl(name);
           
-          // Progressive MP4 (Video + Audio combined) contains _n.mp4 or t51.2885-15 or progressive
           if (name.includes('_n.mp4') || name.includes('progressive') || name.includes('t51.2885-15')) {
             progressiveUrl = clean;
             break;
@@ -381,12 +414,22 @@
     const reactUrl = getUrlFromReactFiber(videoElement);
     if (reactUrl && !isAudioOnlyUrl(reactUrl)) return reactUrl;
 
-    // 2. Query Instagram GraphQL / info API for post/reel shortcode
+    // 2. Query Instagram APIs (Post/Reel shortcode or Story reelId)
     if (isInstagram) {
-      const match = window.location.pathname.match(/\/(p|reel|stories\/[^\/]+)\/([A-Za-z0-9_-]+)/);
-      if (match && match[2]) {
-        const apiUrl = await fetchInstagramProgressiveVideo(match[2]);
-        if (apiUrl) return apiUrl;
+      const pathname = window.location.pathname;
+
+      // Handle IG Stories (/stories/username/story_id/)
+      const storyMatch = pathname.match(/\/stories\/([^\/]+)\/(\d+)/);
+      if (storyMatch && storyMatch[2]) {
+        const storyVideoUrl = await fetchInstagramStoryVideo(storyMatch[2]);
+        if (storyVideoUrl) return storyVideoUrl;
+      }
+
+      // Handle IG Posts & Reels (/p/shortcode/ or /reel/shortcode/)
+      const postMatch = pathname.match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
+      if (postMatch && postMatch[2]) {
+        const postVideoUrl = await fetchInstagramProgressiveVideo(postMatch[2]);
+        if (postVideoUrl) return postVideoUrl;
       }
     }
 
@@ -406,7 +449,7 @@
       }
     }
 
-    // 5. Fallback to Performance resource entries for MP4 (prioritizing progressive combined streams)
+    // 5. Fallback to Performance resource entries for MP4
     const networkUrl = getNetworkVideoUrl();
     if (networkUrl) return networkUrl;
 
