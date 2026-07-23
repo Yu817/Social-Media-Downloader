@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.3.5 IG Stories Sound Fix Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.3.6 Fiber Return Component Walker Version)
 
 (function () {
   'use strict';
@@ -43,7 +43,7 @@
   }
 
   console.log(
-    '%c[Social Media Downloader v1.3.5] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.3.6] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -174,12 +174,13 @@
     return true;
   }
 
-  // Safe Non-Circular Object Walker for React Fiber Trees
-  function findVideoUrlInObject(obj, depth = 0, visited = new WeakSet()) {
-    if (!obj || depth > 10 || typeof obj !== 'object') return null;
+  // Safe Props Inspector for video_versions array in Component State
+  function searchPropsForVideoVersions(obj, depth = 0, visited = new WeakSet()) {
+    if (!obj || depth > 6 || typeof obj !== 'object') return null;
     if (visited.has(obj)) return null;
     visited.add(obj);
 
+    // Direct check for video_versions array
     if (Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
       for (const v of obj.video_versions) {
         if (v && v.url && typeof v.url === 'string' && !isAudioOnlyUrl(v.url)) {
@@ -191,23 +192,28 @@
     if (obj.progressive_url && typeof obj.progressive_url === 'string') {
       return cleanVideoUrl(obj.progressive_url);
     }
-    if (obj.video_url && typeof obj.video_url === 'string') {
-      return cleanVideoUrl(obj.video_url);
-    }
 
+    // Inspect common container keys
     try {
-      const keys = Object.keys(obj);
-      for (const key of keys) {
-        if (key === 'return' || key === 'child' || key === 'sibling' || key === 'stateNode' || key === 'alternate') {
-          continue;
-        }
-        const val = obj[key];
-        if (val && typeof val === 'object') {
-          const found = findVideoUrlInObject(val, depth + 1, visited);
-          if (found) return found;
-        } else if (typeof val === 'string' && val.startsWith('http') && val.includes('.mp4') && !isAudioOnlyUrl(val)) {
-          if (key.includes('video') || key.includes('url') || key.includes('src')) {
-            return cleanVideoUrl(val);
+      if (obj.item && typeof obj.item === 'object') {
+        const found = searchPropsForVideoVersions(obj.item, depth + 1, visited);
+        if (found) return found;
+      }
+      if (obj.media && typeof obj.media === 'object') {
+        const found = searchPropsForVideoVersions(obj.media, depth + 1, visited);
+        if (found) return found;
+      }
+      if (obj.story && typeof obj.story === 'object') {
+        const found = searchPropsForVideoVersions(obj.story, depth + 1, visited);
+        if (found) return found;
+      }
+
+      for (const k in obj) {
+        if (k === 'children' || k.includes('video') || k.includes('story') || k.includes('item') || k.includes('media') || k.includes('Reel')) {
+          const val = obj[k];
+          if (val && typeof val === 'object') {
+            const found = searchPropsForVideoVersions(val, depth + 1, visited);
+            if (found) return found;
           }
         }
       }
@@ -216,32 +222,42 @@
     return null;
   }
 
-  // Extract full unfragmented COMBINED Video+Audio MP4 URL from React Fiber props (Includes IG Story Dialog Containers)
+  // Deep React Component Fiber Tree Walker (Climbs fiber.return up to 30 levels to extract IG Story Component state)
   function getUrlFromReactFiber(element) {
+    let curr = element;
+    let depth = 0;
     const visited = new WeakSet();
 
-    // Check both video element and parent story dialog container
-    const storyContainer = element.closest ? element.closest('section, div[role="dialog"], [role="presentation"], article, main') : null;
-    const targets = storyContainer ? [element, storyContainer] : [element];
+    while (curr && depth < 10 && curr !== document.body) {
+      for (const key in curr) {
+        if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$') || key.startsWith('__reactProps$')) {
+          let fiber = curr[key];
+          let fiberDepth = 0;
+          
+          while (fiber && fiberDepth < 30) {
+            // Check memoizedProps / pendingProps
+            const props = fiber.memoizedProps || fiber.pendingProps;
+            if (props) {
+              const found = searchPropsForVideoVersions(props, 0, visited);
+              if (found) return found;
+            }
 
-    for (const target of targets) {
-      let curr = target;
-      let depth = 0;
-      while (curr && depth < 15 && curr !== document.body) {
-        for (const key in curr) {
-          if (key.startsWith('__reactProps$') || key.startsWith('__reactFiber$')) {
-            try {
-              const val = curr[key];
-              const foundUrl = findVideoUrlInObject(val, 0, visited);
-              if (foundUrl) {
-                return foundUrl;
+            // Check stateNode Component instance props/state
+            if (fiber.stateNode && typeof fiber.stateNode === 'object') {
+              const compProps = fiber.stateNode.props || fiber.stateNode.state;
+              if (compProps) {
+                const found = searchPropsForVideoVersions(compProps, 0, visited);
+                if (found) return found;
               }
-            } catch (e) {}
+            }
+
+            fiber = fiber.return;
+            fiberDepth++;
           }
         }
-        curr = curr.parentElement;
-        depth++;
       }
+      curr = curr.parentElement;
+      depth++;
     }
     return null;
   }
@@ -265,11 +281,12 @@
     return null;
   }
 
-  // Fetch Instagram Story Reel Media API for Story video with full audio
-  async function fetchInstagramStoryVideo(storyId) {
-    if (!storyId) return null;
+  // Fetch Instagram Story Reel Media API by username/user_id for Story video with full audio
+  async function fetchInstagramStoryVideo(username, storyId) {
+    if (!username && !storyId) return null;
     try {
-      const apiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${storyId}`;
+      const targetId = username || storyId;
+      const apiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${targetId}`;
       const res = await fetch(apiUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
       if (res.ok) {
         const data = await res.json();
@@ -410,18 +427,20 @@
 
   // Video Source Resolver (Prioritizes Combined Video+Audio Progressive Stream)
   async function getVideoUrl(videoElement) {
-    // 1. Extract combined progressive MP4 URL from React Fiber props (Highest Priority)
+    // 1. Extract combined progressive MP4 URL from React Component Fiber Tree (Highest Priority)
     const reactUrl = getUrlFromReactFiber(videoElement);
     if (reactUrl && !isAudioOnlyUrl(reactUrl)) return reactUrl;
 
-    // 2. Query Instagram APIs (Post/Reel shortcode or Story reelId)
+    // 2. Query Instagram APIs (Post/Reel shortcode or Story username/reelId)
     if (isInstagram) {
       const pathname = window.location.pathname;
 
       // Handle IG Stories (/stories/username/story_id/)
-      const storyMatch = pathname.match(/\/stories\/([^\/]+)\/(\d+)/);
-      if (storyMatch && storyMatch[2]) {
-        const storyVideoUrl = await fetchInstagramStoryVideo(storyMatch[2]);
+      const storyMatch = pathname.match(/\/stories\/([^\/]+)\/(\d+)?/);
+      if (storyMatch) {
+        const username = storyMatch[1];
+        const storyId = storyMatch[2];
+        const storyVideoUrl = await fetchInstagramStoryVideo(username, storyId);
         if (storyVideoUrl) return storyVideoUrl;
       }
 
