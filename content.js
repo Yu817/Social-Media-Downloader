@@ -661,11 +661,12 @@
 
   // Video Source Resolver (Prioritizes Combined Video+Audio Progressive Stream)
   async function getVideoUrl(videoElement) {
-    // 1. Extract combined progressive MP4 URL from React Component Fiber Tree (Highest Priority)
-    const reactUrl = getUrlFromReactFiber(videoElement);
+    // 1. SHALLOW fiber scan only (max 4 DOM parents, 5 fiber levels)
+    // The deep walker would climb to feed-level components holding MULTIPLE posts' data.
+    const reactUrl = getUrlFromReactFiberShallow(videoElement);
     if (reactUrl && !isAudioOnlyUrl(reactUrl)) return reactUrl;
 
-    // 2. Query Instagram APIs (Post/Reel shortcode or Story username/reelId)
+    // 2. Query Instagram APIs
     if (isInstagram) {
       const pathname = window.location.pathname;
 
@@ -678,10 +679,31 @@
         if (storyVideoUrl) return storyVideoUrl;
       }
 
-      // Handle IG Posts & Reels (/p/shortcode/ or /reel/shortcode/)
+      // Handle IG Posts & Reels - try to get shortcode from:
+      // a) The URL (works when viewing a single post page)
+      // b) The closest <article> ancestor's link (works in feed scroll)
+      let shortcode = null;
       const postMatch = pathname.match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
       if (postMatch && postMatch[2]) {
-        const postVideoUrl = await fetchInstagramProgressiveVideo(postMatch[2]);
+        shortcode = postMatch[2];
+      }
+
+      // If we're in the feed (no shortcode in URL), find it from the article element
+      if (!shortcode) {
+        const article = videoElement.closest('article');
+        if (article) {
+          const postLink = article.querySelector('a[href*="/p/"], a[href*="/reel/"]');
+          if (postLink) {
+            const linkMatch = postLink.getAttribute('href').match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
+            if (linkMatch && linkMatch[2]) {
+              shortcode = linkMatch[2];
+            }
+          }
+        }
+      }
+
+      if (shortcode) {
+        const postVideoUrl = await fetchInstagramProgressiveVideo(shortcode);
         if (postVideoUrl) return postVideoUrl;
       }
     }

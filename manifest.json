@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Social Media Downloader (Threads, IG, X, FB)",
-  "version": "1.4.6",
+  "version": "1.4.7",
   "description": "支援 Threads, Instagram, X (Twitter), Facebook, Pinterest 一鍵下載高畫質圖片與影片。",
   "permissions": [
     "downloads",
