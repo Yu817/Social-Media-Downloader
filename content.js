@@ -1,4 +1,4 @@
-// Social Media Downloader Content Script - Multi-Platform (v1.2.5 Disconnect-Proof Fallback Version)
+// Social Media Downloader Content Script - Multi-Platform (v1.2.6 Bulletproof Avatar Shield Version)
 
 (function () {
   'use strict';
@@ -43,7 +43,7 @@
   }
 
   console.log(
-    '%c[Social Media Downloader v1.2.5] Active on: ' + window.location.hostname,
+    '%c[Social Media Downloader v1.2.6] Active on: ' + window.location.hostname,
     'background: #10b981; color: #ffffff; font-size: 13px; font-weight: bold; padding: 4px 8px; border-radius: 4px;'
   );
 
@@ -83,6 +83,58 @@
     if (!url) return false;
     const lower = url.toLowerCase();
     return lower.includes('_a.mp4') || lower.includes('mime=audio') || lower.includes('audio_') || lower.includes('.mp3');
+  }
+
+  // Multi-Layer Bulletproof Avatar Detector
+  function isAvatarImage(img) {
+    if (!img) return true;
+    const src = (img.currentSrc || img.src || '').toLowerCase();
+    const alt = (img.alt || '').toLowerCase();
+
+    // 1. Meta / IG / Twitter / FB CDN URL-based Avatar Signature
+    if (src.includes('t51.2885-19') || src.includes('t51.36379-19') || src.includes('s150x150') || src.includes('s320x320') || src.includes('/profile_images/')) {
+      return true;
+    }
+    if (src.includes('/p100x100/') || src.includes('/p50x50/') || src.includes('/p160x160/') || src.includes('/75x75_')) {
+      return true;
+    }
+
+    // 2. Multilingual Alt Keyword Check
+    if (alt.includes('profile') || alt.includes('avatar') || alt.includes('頭像') || alt.includes('大頭貼') || alt.includes('写真') || alt.includes('perfil')) {
+      return true;
+    }
+
+    // 3. Header & Profile Link Container Check
+    if (img.closest('header')) return true;
+
+    const parentAnchor = img.closest('a');
+    if (parentAnchor) {
+      const href = (parentAnchor.getAttribute('href') || '').toLowerCase();
+      // If anchor links to user profile and not a post/status/reel
+      if (href && !href.includes('/p/') && !href.includes('/post/') && !href.includes('/status/') && !href.includes('/reel/') && !href.includes('/tv/')) {
+        const aRect = parentAnchor.getBoundingClientRect();
+        if (aRect.width < 160 && aRect.height < 160) {
+          return true;
+        }
+      }
+    }
+
+    // 4. Relative Area Comparison vs Post Media
+    const rect = img.getBoundingClientRect();
+    if (rect.width < 120 || rect.height < 120) {
+      const article = img.closest('article, section, [role="article"]');
+      if (article) {
+        const otherImgs = article.querySelectorAll('img');
+        for (const other of otherImgs) {
+          const oRect = other.getBoundingClientRect();
+          if (oRect.width > rect.width * 1.8 && oRect.height > rect.height * 1.8) {
+            return true; // Much smaller than main post photo -> avatar
+          }
+        }
+      }
+    }
+
+    return false;
   }
 
   // Extract full unfragmented MP4 URL from React Fiber props (Meta/IG/Threads SPA)
@@ -140,27 +192,6 @@
       console.warn('[Social Media Downloader] Performance entry lookup error:', e);
     }
     return null;
-  }
-
-  // Helper to identify avatar images
-  function isAvatarImage(img) {
-    const rect = img.getBoundingClientRect();
-    if (rect.width < 85 || rect.height < 85) return true;
-
-    const alt = (img.alt || '').toLowerCase();
-    if (alt.includes('profile picture') || alt.includes('頭像') || alt.includes('大頭貼') || alt.includes('avatar') || alt.includes('profile photo')) {
-      return true;
-    }
-
-    if (img.closest('header')) return true;
-
-    const parentAnchor = img.closest('a');
-    if (parentAnchor) {
-      const aRect = parentAnchor.getBoundingClientRect();
-      if (aRect.width < 85 || aRect.height < 85) return true;
-    }
-
-    return false;
   }
 
   // Find best media element
