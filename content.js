@@ -1351,10 +1351,11 @@
     if (activeFloatingBtn) return activeFloatingBtn;
 
     const btn = document.createElement('button');
-    btn.className = 'tmd-download-btn tmd-floating-btn';
+    btn.className = 'tmd-download-btn tmd-floating-btn tmd-hidden';
     btn.setAttribute('type', 'button');
     btn.setAttribute('aria-label', '下載媒體');
     btn.setAttribute('data-tooltip', '下載媒體');
+    btn.style.setProperty('display', 'none', 'important');
     btn.innerHTML = SVG_DOWNLOAD;
 
     btn.addEventListener('click', async (e) => {
@@ -1501,7 +1502,7 @@
   // Update floating button position
   function updateFloatingButtonPosition(mediaElement, type) {
     if (!isExtensionEnabled) {
-      hideFloatingButton();
+      hideFloatingButton(true);
       return;
     }
 
@@ -1510,7 +1511,12 @@
 
     const isInViewport = rect.bottom > 0 && rect.right > 0 &&
       rect.left < window.innerWidth && rect.top < window.innerHeight;
-    if (!mediaElement.isConnected || rect.width < 60 || rect.height < 60 || !isInViewport) {
+    if (!mediaElement.isConnected || rect.width < 96 || rect.height < 96 || !isInViewport) {
+      hideFloatingButton(true);
+      return;
+    }
+
+    if (Date.now() - modalCloseCooldownTimestamp < 500) {
       hideFloatingButton(true);
       return;
     }
@@ -1521,11 +1527,15 @@
     const top = Math.max(rect.top + 8, Math.min(rect.top + 12, window.innerHeight - 58));
     const left = Math.max(rect.left + 8, Math.min(rect.right - 48, window.innerWidth - 50));
 
-    btn.style.display = 'flex';
-    btn.style.position = 'fixed';
-    btn.style.top = `${top}px`;
-    btn.style.left = `${left}px`;
-    btn.style.zIndex = '2147483647';
+    btn.classList.remove('tmd-hidden');
+    btn.style.setProperty('display', 'flex', 'important');
+    btn.style.setProperty('opacity', '1', 'important');
+    btn.style.setProperty('visibility', 'visible', 'important');
+    btn.style.setProperty('pointer-events', 'auto', 'important');
+    btn.style.setProperty('position', 'fixed', 'important');
+    btn.style.setProperty('top', `${top}px`, 'important');
+    btn.style.setProperty('left', `${left}px`, 'important');
+    btn.style.setProperty('z-index', '2147483647', 'important');
     btn.setAttribute('data-tooltip', type === 'video' ? '下載影片' : '下載圖片');
   }
 
@@ -1533,7 +1543,11 @@
   function hideFloatingButton(force = false) {
     const canHide = force || !activeFloatingBtn?.matches(':hover');
     if (activeFloatingBtn && canHide) {
-      activeFloatingBtn.style.display = 'none';
+      activeFloatingBtn.classList.add('tmd-hidden');
+      activeFloatingBtn.style.setProperty('display', 'none', 'important');
+      activeFloatingBtn.style.setProperty('opacity', '0', 'important');
+      activeFloatingBtn.style.setProperty('visibility', 'hidden', 'important');
+      activeFloatingBtn.style.setProperty('pointer-events', 'none', 'important');
     }
     if (canHide) {
       activeMediaElement = null;

@@ -9,12 +9,12 @@
   -webkit-backdrop-filter: blur(10px) !important;
   border: 1.5px solid rgba(255, 255, 255, 0.5) !important;
   color: #ffffff !important;
-  display: flex !important;
+  display: flex;
   align-items: center !important;
   justify-content: center !important;
   cursor: pointer !important;
-  opacity: 1 !important;
-  visibility: visible !important;
+  opacity: 1;
+  visibility: visible;
   transform: scale(1) !important;
   transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease !important;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6) !important;
@@ -23,8 +23,15 @@
   outline: none !important;
   padding: 0 !important;
   margin: 0 !important;
-  pointer-events: auto !important;
+  pointer-events: auto;
   z-index: 2147483647 !important;
+}
+
+.tmd-download-btn.tmd-hidden {
+  display: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
 }
 
 .tmd-floating-btn {
