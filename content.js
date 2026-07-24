@@ -119,40 +119,43 @@
     // 1. Role or aria-label signals it's a profile avatar or logo icon
     if (role === 'img' && (ariaLabel.includes('profile') || ariaLabel.includes('avatar') || ariaLabel.includes('logo') || ariaLabel.includes('頭像') || ariaLabel.includes('大頭貼'))) return true;
 
-    // 2. Profile avatars are tiny (24px - 48px circles).
-    // Real post media on Threads/IG/Twitter are almost always >= 50px.
+    // 2. Profile avatars & sidebar/header icons are small (<96px).
+    // Real post media on IG/Threads/Twitter/FB are always >= 96px in width & height.
     const rect = img.getBoundingClientRect();
-    if (rect.width < 50 || rect.height < 50) return true;
+    if (rect.width < 96 || rect.height < 96) return true;
 
-    // 3. CDN URL patterns that are specific to avatars (Meta/IG/Twitter)
+    // 3. Images inside sidebars (aside, [role="complementary"], right sidebar "為你推薦"), headers, navigation, or comment lists are avatars/icons
+    if (img.closest('aside, nav, header, [role="navigation"], [role="complementary"], [data-testid*="sidebar"]')) return true;
+
+    // 4. CDN URL patterns that are specific to avatars (Meta/IG/Twitter)
     if (
       src.includes('t51.2885-19') || src.includes('t51.36379-19') ||
       src.includes('/profile_images/') ||
       src.includes('/p100x100/') || src.includes('/p50x50/') || src.includes('/p160x160/') ||
-      src.includes('/75x75_')
+      src.includes('/75x75_') || src.includes('/s150x150/')
     ) return true;
 
-    // 4. Alt text keywords for avatars
+    // 5. Alt text keywords for avatars
     if (
       alt.includes('profile photo') || alt.includes('profile picture') ||
       alt.includes('avatar') || alt.includes('頭像') || alt.includes('大頭貼') ||
       alt.includes('photo de profil')
     ) return true;
 
-    // 5. Class-based heuristics for avatars
+    // 6. Class-based heuristics for avatars
     if (
       classList.includes('Avatar') || classList.includes('avatar') ||
       classList.includes('ProfilePhoto') || classList.includes('_aadp')
     ) return true;
 
-    // 6. If nested inside a small user-profile anchor (<75px)
+    // 7. If nested inside a non-post profile link anchor (e.g. user recommendation or profile link <150px)
     const parentAnchor = img.closest('a');
     if (parentAnchor) {
       const href = (parentAnchor.getAttribute('href') || '').toLowerCase();
       const isPostLink = href.includes('/p/') || href.includes('/post/') || href.includes('/status/') || href.includes('/reel/') || href.includes('/tv/') || href.includes('/t/');
       if (!isPostLink && (href.startsWith('/@') || href.includes('instagram.com/') || href.includes('twitter.com/'))) {
         const aRect = parentAnchor.getBoundingClientRect();
-        if (aRect.width < 75 && aRect.height < 75) return true;
+        if (aRect.width < 150 || aRect.height < 150) return true;
       }
     }
 
@@ -162,9 +165,9 @@
   // Is the image fully rendered and large enough to be post content?
   function isContentImage(img) {
     if (!img) return false;
-    if (!img.complete || !img.naturalWidth || img.naturalWidth < 80 || !img.naturalHeight || img.naturalHeight < 80) return false;
+    if (!img.complete || !img.naturalWidth || img.naturalWidth < 100 || !img.naturalHeight || img.naturalHeight < 100) return false;
     const rect = img.getBoundingClientRect();
-    return rect.width >= 50 && rect.height >= 50;
+    return rect.width >= 96 && rect.height >= 96;
   }
 
   // Is the video fully loaded with real video dimensions?
@@ -173,7 +176,7 @@
     const width = video.videoWidth || 0;
     const height = video.videoHeight || 0;
     const rect = video.getBoundingClientRect();
-    if (rect.width < 50 || rect.height < 50) return false;
+    if (rect.width < 96 || rect.height < 96) return false;
     if (video.readyState < 1 && width === 0) return false;
     return true;
   }
@@ -1598,6 +1601,12 @@
     return true;
   }
 
+  let modalCloseCooldownTimestamp = 0;
+  function triggerModalCloseCooldown() {
+    modalCloseCooldownTimestamp = Date.now();
+    hideFloatingButton(true);
+  }
+
   // =========================================================================
   // MOUSEMOVE: Only show button when mouse is DIRECTLY on a content media element
   // =========================================================================
@@ -1608,8 +1617,8 @@
     lastPointerX = e.clientX;
     lastPointerY = e.clientY;
 
-    if (!isExtensionEnabled) {
-      hideFloatingButton();
+    if (!isExtensionEnabled || (Date.now() - modalCloseCooldownTimestamp < 500)) {
+      hideFloatingButton(true);
       return;
     }
 
@@ -1637,6 +1646,7 @@
   // still. Re-run the same hover check when the actual image/video becomes
   // ready instead of requiring the user to move the mouse again.
   function handleMediaReady(e) {
+    if (Date.now() - modalCloseCooldownTimestamp < 500) return;
     const element = e.target;
     if (!element || (element.tagName !== 'IMG' && element.tagName !== 'VIDEO')) return;
     if (!Number.isFinite(lastPointerX) || !Number.isFinite(lastPointerY)) return;
@@ -1669,13 +1679,13 @@
     }
   }, { passive: true });
 
-  window.addEventListener('blur', () => hideFloatingButton(true));
+  window.addEventListener('blur', () => triggerModalCloseCooldown());
 
   // Hide floating button immediately on click/pointer outside (e.g. closing modal via close button 'X' or backdrop)
   const handleOutsideInteraction = (e) => {
     if (!activeFloatingBtn || activeFloatingBtn.style.display === 'none') return;
     if (e.target && e.target.closest && e.target.closest('.tmd-download-btn')) return;
-    hideFloatingButton(true);
+    triggerModalCloseCooldown();
   };
 
   window.addEventListener('pointerdown', handleOutsideInteraction, true);
@@ -1685,7 +1695,7 @@
   // Hide floating button immediately on ESC key or navigation keys (keydown & keyup in capture phase on window)
   const handleKeyClose = (e) => {
     if (e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27) {
-      hideFloatingButton(true);
+      triggerModalCloseCooldown();
     }
   };
 
@@ -1693,13 +1703,17 @@
   window.addEventListener('keyup', handleKeyClose, true);
 
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) hideFloatingButton(true);
+    if (document.hidden) triggerModalCloseCooldown();
   });
-  window.addEventListener('popstate', () => hideFloatingButton(true));
-  window.addEventListener('hashchange', () => hideFloatingButton(true));
+  window.addEventListener('popstate', () => triggerModalCloseCooldown());
+  window.addEventListener('hashchange', () => triggerModalCloseCooldown());
 
   if (typeof MutationObserver !== 'undefined' && document.body) {
-    const floatingStateObserver = new MutationObserver(() => validateFloatingButtonState());
+    const floatingStateObserver = new MutationObserver(() => {
+      if (Date.now() - modalCloseCooldownTimestamp >= 500) {
+        validateFloatingButtonState();
+      }
+    });
     floatingStateObserver.observe(document.body, {
       childList: true,
       subtree: true,
@@ -1710,6 +1724,10 @@
 
   // Modal close animations can leave the old media connected for a short time
   // without producing mouse, keyboard or history events.
-  window.setInterval(validateFloatingButtonState, 200);
+  window.setInterval(() => {
+    if (Date.now() - modalCloseCooldownTimestamp >= 500) {
+      validateFloatingButtonState();
+    }
+  }, 200);
 
 })();
