@@ -1740,12 +1740,29 @@
     });
   }
 
+  // Dynamic Instagram Story Un-blur Cleaner
+  function cleanInstagramStoryOverlays() {
+    if (!isInstagram || !window.location.pathname.includes('/stories/')) return;
+    try {
+      const blurredElements = document.querySelectorAll('[style*="blur"], [style*="filter"]');
+      blurredElements.forEach((el) => {
+        if (el.classList.contains('tmd-download-btn')) return;
+        el.style.setProperty('filter', 'none', 'important');
+        el.style.setProperty('-webkit-filter', 'none', 'important');
+        el.style.setProperty('backdrop-filter', 'none', 'important');
+        el.style.setProperty('-webkit-backdrop-filter', 'none', 'important');
+      });
+    } catch (e) {}
+  }
+
   // Modal close animations can leave the old media connected for a short time
   // without producing mouse, keyboard or history events.
   window.setInterval(() => {
+    cleanInstagramStoryOverlays();
     if (Date.now() - modalCloseCooldownTimestamp >= 500) {
       validateFloatingButtonState();
     }
   }, 200);
 
 })();
+

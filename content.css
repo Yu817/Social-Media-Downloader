@@ -107,3 +107,73 @@
 .tmd-download-btn.tmd-loading svg {
   animation: tmd-spin 0.8s linear infinite !important;
 }
+
+/* Instagram Story Unblur & Remove Overlay Effects */
+div[role="dialog"] *,
+div[role="presentation"] * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Target pseudo-elements (::before / ::after) used for dark blur masks */
+div[role="dialog"] *::before,
+div[role="dialog"] *::after,
+div[role="presentation"] *::before,
+div[role="presentation"] *::after,
+div[role="button"] *::before,
+div[role="button"] *::after {
+  display: none !important;
+  opacity: 0 !important;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+}
+
+/* Remove inline filter blur styles */
+[style*="blur"] {
+  filter: none !important;
+  -webkit-filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Un-blur images, canvas, and video previews in Story carousel */
+div[role="dialog"] img,
+div[role="dialog"] video,
+div[role="dialog"] canvas,
+div[role="dialog"] div[style*="background-image"],
+div[role="presentation"] img,
+div[role="presentation"] video,
+div[role="presentation"] canvas,
+div[role="button"] img,
+div[role="button"] video,
+div[role="button"] canvas,
+div[role="link"] img,
+div[role="link"] video,
+div[role="link"] canvas {
+  filter: none !important;
+  -webkit-filter: none !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+/* Remove dark dimming overlay mask layer on adjacent story cards */
+div[role="button"] > div > div:not(:first-child),
+div[role="link"] > div > div:not(:first-child),
+a[href*="/stories/"] > div > div:not(:first-child) {
+  background: transparent !important;
+  background-color: transparent !important;
+  opacity: 0 !important;
+}
+
+
+
+
+
+
+
+
+
+
+
