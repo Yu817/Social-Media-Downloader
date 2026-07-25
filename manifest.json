@@ -25,7 +25,18 @@
   "content_scripts": [
     {
       "matches": [
-        "<all_urls>"
+        "*://*.threads.net/*",
+        "*://*.threads.com/*",
+        "*://*.instagram.com/*",
+        "*://*.twitter.com/*",
+        "*://*.x.com/*",
+        "*://*.facebook.com/*",
+        "*://*.pinterest.com/*",
+        "*://*.pinterest.ca/*",
+        "*://*.pinterest.co.uk/*",
+        "*://*.pinterest.fr/*",
+        "*://*.pinterest.de/*",
+        "*://*.pinterest.jp/*"
       ],
       "js": [
         "content.js"

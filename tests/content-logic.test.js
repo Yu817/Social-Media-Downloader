@@ -199,4 +199,23 @@ const hiddenMedia = {
 };
 assert.equal(api.isVisibleMediaElement(hiddenMedia), false);
 
+// Test non-supported domain early return
+const unsupportedContext = {
+  window: {
+    location: { hostname: 'www.google.com', href: 'https://www.google.com/', pathname: '/' },
+    innerWidth: 1920,
+    innerHeight: 1080,
+    addEventListener() {},
+    getComputedStyle() { return {}; }
+  },
+  document: documentStub,
+  location: { hostname: 'www.google.com' },
+  console: { log() {}, warn() {} },
+  setTimeout() { return 1; },
+  clearTimeout() {}
+};
+unsupportedContext.window.top = unsupportedContext.window;
+vm.runInNewContext(source, unsupportedContext, { filename: contentPath });
+assert.equal(unsupportedContext.__TMD_TEST__, undefined);
+
 console.log('content logic tests passed');

@@ -17,6 +17,10 @@
   const isFacebook = host.includes('facebook.com');
   const isPinterest = host.includes('pinterest.com');
 
+  if (!isThreads && !isInstagram && !isTwitter && !isFacebook && !isPinterest) {
+    return;
+  }
+
   let isExtensionEnabled = true;
 
   // Load initial settings with fallback
