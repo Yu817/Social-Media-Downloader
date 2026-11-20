@@ -28,6 +28,20 @@
         "*://*.threads.net/*",
         "*://*.threads.com/*",
         "*://*.instagram.com/*",
+        "*://*.facebook.com/*"
+      ],
+      "js": [
+        "page-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "*://*.threads.net/*",
+        "*://*.threads.com/*",
+        "*://*.instagram.com/*",
         "*://*.twitter.com/*",
         "*://*.x.com/*",
         "*://*.facebook.com/*",

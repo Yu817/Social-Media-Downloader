@@ -82,29 +82,124 @@
     return clean;
   }
 
-  // Multi-Layer Audio-Only Stream Detector (Includes Meta efg Base64 decoding)
+  // Decode Meta efg Base64 JSON parameter (handles URL-safe Base64 and missing padding)
+  function decodeMetaEfg(url) {
+    if (!url || typeof url !== 'string') return null;
+    const efgMatch = url.match(/[?&]efg=([^&]+)/i);
+    if (!efgMatch || !efgMatch[1]) return null;
+    try {
+      let b64 = decodeURIComponent(efgMatch[1]);
+      b64 = b64.replace(/-/g, '+').replace(/_/g, '/');
+      const pad = b64.length % 4;
+      if (pad) b64 += '='.repeat(4 - pad);
+      const decoded = window.atob(b64);
+      try {
+        return { raw: decoded, json: JSON.parse(decoded) };
+      } catch (e) {
+        return { raw: decoded, json: null };
+      }
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function getMetaVencodeTag(url) {
+    const efg = decodeMetaEfg(url);
+    if (!efg) return '';
+    if (efg.json && typeof efg.json === 'object') {
+      return String(efg.json.vencode_tag || efg.json.tag || '').toLowerCase();
+    }
+    return String(efg.raw || '').toLowerCase();
+  }
+
+  // Multi-Layer Audio-Only Stream Detector (Includes URL-safe Meta efg JSON decoding)
   function isAudioOnlyUrl(url) {
-    if (!url) return false;
+    if (!url || typeof url !== 'string') return false;
     const lower = url.toLowerCase();
 
-    if (lower.includes('dash_audio') || lower.includes('_a.mp4') || lower.includes('mime=audio') || lower.includes('audio_') || lower.includes('.mp3')) {
+    if (
+      lower.includes('dash_audio') ||
+      lower.includes('_a.mp4') ||
+      lower.includes('mime=audio') ||
+      lower.includes('audio_') ||
+      lower.includes('.mp3') ||
+      lower.includes('.m4a') ||
+      lower.includes('.aac')
+    ) {
       return true;
     }
 
-    if (lower.includes('efg=')) {
-      try {
-        const efgMatch = url.match(/[?&]efg=([^&]+)/);
-        if (efgMatch && efgMatch[1]) {
-          let b64 = decodeURIComponent(efgMatch[1]);
-          let decoded = window.atob(b64);
-          if (decoded.includes('audio') && !decoded.includes('video')) {
-            return true;
-          }
-        }
-      } catch (e) {}
+    const tag = getMetaVencodeTag(url);
+    if (tag) {
+      if (
+        tag.includes('audio') ||
+        tag.includes('heaac') ||
+        tag.includes('aac') ||
+        tag.includes('opus') ||
+        tag.includes('dash_r2a') ||
+        /_a($|[^a-z0-9])/.test(tag)
+      ) {
+        return true;
+      }
     }
 
     return false;
+  }
+
+  // Detect DASH-only (video-only or segmented) URLs that lack an audio track
+  function isDashOnlyUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    const lower = url.toLowerCase();
+
+    if (/[?&](bytestart|byteend)=/i.test(url)) return true;
+    if (lower.includes('dash_')) return true;
+
+    const tag = getMetaVencodeTag(url);
+    if (tag && tag.includes('dash') && !tag.includes('progressive')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function isProgressiveVideoUrl(url, trustProgressiveField = false) {
+    if (!url || typeof url !== 'string') return false;
+    if (url.startsWith('blob:') || url.startsWith('data:')) return false;
+    if (!/^https?:\/\//i.test(url)) return false;
+    if (isAudioOnlyUrl(url)) return false;
+    if (/[?&](bytestart|byteend)=/i.test(url)) return false;
+    if (!trustProgressiveField && isDashOnlyUrl(url)) return false;
+    return true;
+  }
+
+  // Synchronously query page-bridge.js (MAIN world) for the exact clicked <video>
+  function requestMainWorldVideoUrl(videoElement, meta = {}) {
+    if (!videoElement || typeof videoElement.setAttribute !== 'function') return null;
+    const probeId = `tmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      videoElement.setAttribute('data-tmd-probe-id', probeId);
+      videoElement.setAttribute('data-tmd-probe-meta', JSON.stringify(meta));
+      videoElement.removeAttribute('data-tmd-probe-result');
+
+      document.dispatchEvent(new Event('tmd-resolve-video'));
+
+      const raw = videoElement.getAttribute('data-tmd-probe-result');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed?.url && isProgressiveVideoUrl(parsed.url, true)) {
+        console.log('[Social Media Downloader] Resolved via MAIN bridge:', parsed.source);
+        return cleanVideoUrl(parsed.url);
+      }
+    } catch (e) {
+      console.warn('[Social Media Downloader] MAIN bridge query failed:', e);
+    } finally {
+      try {
+        videoElement.removeAttribute('data-tmd-probe-id');
+        videoElement.removeAttribute('data-tmd-probe-meta');
+        videoElement.removeAttribute('data-tmd-probe-result');
+      } catch (e) {}
+    }
+    return null;
   }
 
   // =========================================================================
@@ -715,9 +810,10 @@
           }
         }
 
-        // 4. Fallback across all items in Highlight: find first matching item or item 0
-        for (const item of allItems) {
-          const fallbackUrl = getInstagramMediaUrl(item);
+        // 4. Only fall back to item 0 when the reel has a single item.
+        // Never guess item 0 on a multi-item highlight/story reel.
+        if (allItems.length === 1) {
+          const fallbackUrl = getInstagramMediaUrl(allItems[0]);
           if (fallbackUrl) return fallbackUrl;
         }
       } catch (e) {
@@ -735,7 +831,7 @@
     for (const source of sources) candidates.push(source.src);
 
     for (const candidate of candidates) {
-      if (candidate && !candidate.startsWith('blob:') && !isAudioOnlyUrl(candidate)) {
+      if (candidate && isProgressiveVideoUrl(candidate, true)) {
         return cleanVideoUrl(candidate);
       }
     }
@@ -827,12 +923,12 @@
 
   function getInstagramVideoUrl(item) {
     if (!item) return null;
-    if (item.video_url && !isAudioOnlyUrl(item.video_url)) return cleanVideoUrl(item.video_url);
+    if (item.video_url && isProgressiveVideoUrl(item.video_url, true)) return cleanVideoUrl(item.video_url);
 
     const versions = Array.isArray(item.video_versions) ? [...item.video_versions] : [];
-    versions.sort((a, b) => (b.width || 0) - (a.width || 0));
+    versions.sort((a, b) => ((b.width || 0) * (b.height || 0)) - ((a.width || 0) * (a.height || 0)));
     for (const version of versions) {
-      if (version?.url && !isAudioOnlyUrl(version.url)) return cleanVideoUrl(version.url);
+      if (version?.url && isProgressiveVideoUrl(version.url, true)) return cleanVideoUrl(version.url);
     }
     return null;
   }
@@ -989,7 +1085,13 @@
     if (!shortcode) return null;
     try {
       const apiUrl = `https://www.instagram.com/p/${shortcode}/?__a=1&__d=dis`;
-      const res = await fetch(apiUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      const res = await fetch(apiUrl, {
+        credentials: 'include',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          'X-IG-App-ID': '936619743392459'
+        }
+      });
       if (res.ok) {
         const data = await res.json();
         const items = getInstagramMediaItems(data);
@@ -1038,7 +1140,8 @@
     return null;
   }
 
-  // Extract recent video MP4 URL from Performance network resource logs
+  // Extract recent progressive video MP4 URL from Performance network resource logs
+  // Strictly excludes audio-only and DASH-only (silent) fragments.
   function getNetworkVideoUrl() {
     try {
       const entries = performance.getEntriesByType('resource');
@@ -1047,16 +1150,21 @@
 
       for (let i = entries.length - 1; i >= 0; i--) {
         const name = entries[i].name;
-        if (isAudioOnlyUrl(name)) continue;
+        if (!isProgressiveVideoUrl(name)) continue;
 
-        if ((name.includes('.mp4') || name.includes('/v/t51.') || name.includes('/v/t64.')) && (name.includes('cdninstagram.com') || name.includes('fbcdn.net') || name.includes('twimg.com'))) {
+        const isMetaCdn = name.includes('cdninstagram.com') || name.includes('fbcdn.net');
+        const isTwitterCdn = name.includes('twimg.com');
+        if (!isMetaCdn && !isTwitterCdn) continue;
+
+        if (name.includes('.mp4') || name.includes('/v/t51.') || name.includes('/v/t64.')) {
           const clean = cleanVideoUrl(name);
-          
-          if (name.includes('_n.mp4') || name.includes('progressive') || name.includes('t51.2885-15')) {
+          const tag = getMetaVencodeTag(name);
+
+          if (isTwitterCdn || tag.includes('progressive') || name.includes('progressive')) {
             progressiveUrl = clean;
             break;
           }
-          if (!fallbackVideoUrl) {
+          if (!fallbackVideoUrl && !isMetaCdn) {
             fallbackVideoUrl = clean;
           }
         }
@@ -1089,6 +1197,10 @@
     // navigation. Use its own source before inspecting shared React/API data.
     const directUrl = getDirectVideoUrl(videoElement);
     if (directUrl) return directUrl;
+
+    // Query MAIN world bridge (React Fiber + passive GraphQL/SSR registry)
+    const mainBridgeUrl = requestMainWorldVideoUrl(videoElement, { storyId, isHighlight });
+    if (mainBridgeUrl) return mainBridgeUrl;
 
     const scopedFiberUrl = getReactVideoUrlByMetadata(videoElement);
     if (scopedFiberUrl) {
@@ -1241,79 +1353,90 @@
     return rawSrc;
   }
 
+  function findInstagramShortcodeForElement(videoElement) {
+    const pathname = window.location.pathname || '';
+    const postMatch = pathname.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
+    if (postMatch && postMatch[2]) return postMatch[2];
+
+    const article = videoElement?.closest?.('article');
+    if (article) {
+      const postLink = article.querySelector('a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]');
+      const linkMatch = postLink?.getAttribute('href')?.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
+      if (linkMatch && linkMatch[2]) return linkMatch[2];
+    }
+
+    // Fallback for Reels/Explore views without <article>: inspect ancestors that own only this video
+    let anc = videoElement?.parentElement;
+    for (let depth = 0; anc && depth < 6; depth++, anc = anc.parentElement) {
+      const vids = anc.querySelectorAll?.('video');
+      if (vids && vids.length === 1) {
+        const postLink = anc.querySelector('a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]');
+        const linkMatch = postLink?.getAttribute('href')?.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
+        if (linkMatch && linkMatch[2]) return linkMatch[2];
+      }
+    }
+
+    return null;
+  }
+
   // Video Source Resolver (Prioritizes Combined Video+Audio Progressive Stream)
   async function getVideoUrl(videoElement) {
     // 1. Prefer the source attached to the exact DOM video element.
-    // React/API data can contain multiple carousel items and is not scoped
-    // reliably enough to run before the element's own source.
     const directUrl = getDirectVideoUrl(videoElement);
     if (directUrl) return directUrl;
 
-    const isCarousel = isLikelyInstagramCarousel(videoElement);
+    const isMetaPlatform = isInstagram || isThreads || isFacebook;
+    const isCarousel = isInstagram && isLikelyInstagramCarousel(videoElement);
+    const shortcode = isInstagram ? findInstagramShortcodeForElement(videoElement) : null;
 
-    const scopedFiberUrl = getReactVideoUrlByMetadata(videoElement);
-    if (scopedFiberUrl) return scopedFiberUrl;
-
-    // 2. SHALLOW fiber scan only (max 4 DOM parents, 12 fiber levels).
-    // Skip this for carousels because the shared Fiber tree can contain
-    // several slides and return the first one.
-    if (!isCarousel) {
-      const reactUrl = getUrlFromReactFiberShallow(videoElement);
-      if (reactUrl && !isAudioOnlyUrl(reactUrl)) return reactUrl;
+    // 2. Query MAIN world page-bridge (React Fiber + passive GraphQL/SSR registry)
+    // This runs in the page's real JS world so __reactFiber$ and GraphQL payloads are visible.
+    if (isMetaPlatform) {
+      const mainBridgeUrl = requestMainWorldVideoUrl(videoElement, {
+        shortcode,
+        isCarousel
+      });
+      if (mainBridgeUrl) return mainBridgeUrl;
     }
 
-    // 3. Query Instagram APIs
+    const scopedFiberUrl = getReactVideoUrlByMetadata(videoElement);
+    if (scopedFiberUrl && isProgressiveVideoUrl(scopedFiberUrl)) return scopedFiberUrl;
+
+    // 3. SHALLOW fiber scan fallback (skip for carousels)
+    if (!isCarousel) {
+      const reactUrl = getUrlFromReactFiberShallow(videoElement);
+      if (reactUrl && isProgressiveVideoUrl(reactUrl)) return reactUrl;
+    }
+
+    // 4. Query Instagram APIs
     if (isInstagram) {
       const pathname = window.location.pathname;
 
-      // Handle IG Stories (/stories/username/story_id/)
-      const storyMatch = pathname.match(/\/stories\/([^\/]+)\/(\d+)?/);
+      // Handle IG Stories (/stories/username/story_id/) using strict storyId/metadata matching
+      const storyMatch = pathname.match(/\/stories\/([^\/]+)(?:\/(\d+))?/);
       if (storyMatch) {
         const username = storyMatch[1];
         const storyId = storyMatch[2];
-        const storyVideoUrl = await fetchInstagramStoryVideo(username, storyId);
-        if (storyVideoUrl) return storyVideoUrl;
-      }
-
-      // Handle IG Posts & Reels - try to get shortcode from:
-      // a) The URL (works when viewing a single post page)
-      // b) The closest <article> ancestor's link (works in feed scroll)
-      let shortcode = null;
-      const postMatch = pathname.match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
-      if (postMatch && postMatch[2]) {
-        shortcode = postMatch[2];
-      }
-
-      // If we're in the feed (no shortcode in URL), find it from the article element
-      if (!shortcode) {
-        const article = videoElement.closest('article');
-        if (article) {
-          const postLink = article.querySelector('a[href*="/p/"], a[href*="/reel/"]');
-          if (postLink) {
-            const linkMatch = postLink.getAttribute('href').match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
-            if (linkMatch && linkMatch[2]) {
-              shortcode = linkMatch[2];
-            }
-          }
-        }
+        const storyVideoUrl = await fetchStoryItemFromApi(username, storyId, videoElement);
+        if (storyVideoUrl && isProgressiveVideoUrl(storyVideoUrl)) return storyVideoUrl;
       }
 
       if (shortcode) {
         const postVideoUrl = await fetchInstagramProgressiveVideo(shortcode, videoElement);
-        if (postVideoUrl) return postVideoUrl;
+        if (postVideoUrl && isProgressiveVideoUrl(postVideoUrl)) return postVideoUrl;
       }
-
-      // Do not fall through to a shared Fiber/network URL for a carousel.
-      // If the exact slide cannot be identified, refusing the download is
-      // safer than downloading another slide.
-      if (isCarousel) return null;
     }
 
-    // 4. Fallback to Performance resource entries for MP4
-    const networkUrl = getNetworkVideoUrl();
-    if (networkUrl) return networkUrl;
+    // 5. On Meta platforms (IG / Threads / FB), NEVER blindly fall back to global
+    // performance.getEntriesByType('resource') because it grabs preloaded/unrelated
+    // videos or silent DASH fragments. Only use network fallback on non-Meta sites.
+    if (!isMetaPlatform) {
+      const networkUrl = getNetworkVideoUrl();
+      if (networkUrl) return networkUrl;
+    }
 
-    return cleanVideoUrl(videoElement.currentSrc || videoElement.src || null);
+    const rawSrc = videoElement.currentSrc || videoElement.src || null;
+    return isProgressiveVideoUrl(rawSrc) ? cleanVideoUrl(rawSrc) : null;
   }
 
   // Resolve media URL
@@ -1336,11 +1459,14 @@
     if (!url) return null;
 
     if (url.startsWith('blob:')) {
-      const netFallback = getNetworkVideoUrl();
-      if (netFallback) {
-        console.log('[Social Media Downloader] Replaced blob URL with network MP4 fallback:', netFallback);
-        return netFallback;
+      if (!isInstagram && !isThreads && !isFacebook) {
+        const netFallback = getNetworkVideoUrl();
+        if (netFallback) {
+          console.log('[Social Media Downloader] Replaced blob URL with network MP4 fallback:', netFallback);
+          return netFallback;
+        }
       }
+      return null;
     }
 
     return url;
@@ -1418,10 +1544,10 @@
       if (!mediaUrl) {
         btn.classList.remove('tmd-loading');
         btn.innerHTML = SVG_DOWNLOAD;
-        btn.setAttribute('data-tooltip', '無法解析連結');
+        btn.setAttribute('data-tooltip', type === 'video' ? '無法解析原聲影片，請先播放或重整再試' : '無法解析連結');
         setTimeout(() => {
           btn.setAttribute('data-tooltip', type === 'video' ? '下載影片' : '下載圖片');
-        }, 2000);
+        }, 2500);
         return;
       }
 
