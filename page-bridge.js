@@ -519,8 +519,8 @@
           promise
             .then((res) => {
               if (!res || !res.ok) return;
-              const ct = (res.headers && res.headers.get('content-type')) || '';
-              if (ct && !ct.includes('json') && !ct.includes('javascript') && !ct.includes('text')) return;
+              const ct = ((res.headers && res.headers.get('content-type')) || '').toLowerCase();
+              if (ct.startsWith('image/') || ct.startsWith('video/') || ct.startsWith('audio/') || ct.startsWith('font/')) return;
               res.clone().text().then(parseAndIndexPayloadText).catch(() => {});
             })
             .catch(() => {});

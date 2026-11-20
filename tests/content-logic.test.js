@@ -18,7 +18,8 @@ source = source.replace(
     isAudioOnlyUrl,
     isDashOnlyUrl,
     isProgressiveVideoUrl,
-    getNetworkVideoUrl
+    getNetworkVideoUrl,
+    extractThreadsVideosFromHtml
   };
 })();`
 );
@@ -558,5 +559,34 @@ resolveHandler();
 const dupResult = JSON.parse(dupVidAttrs.get('data-tmd-probe-result'));
 assert.equal(dupResult.url, `https://scontent-tpe1-2.cdninstagram.com/v/t51/same_vid_n.mp4?oh=BBB&efg=${progressiveEfg}`);
 assert.equal(dupResult.source, 'main-registry');
+
+// Case 6: Threads on-demand post HTML fallback extracts exact shortcode's video_versions
+const sampleThreadsHtml = `
+  <html><body>
+    <script type="application/json" data-sjs>${JSON.stringify({
+      require: [[['X', 'Y', null, [{
+        __bbox: {
+          result: {
+            data: {
+              posts: [
+                {
+                  code: 'Df7kFQfElDu',
+                  video_versions: [{ url: `https://scontent.cdninstagram.com/v/t51/other.mp4?efg=${progressiveEfg}`, width: 720, height: 1280 }]
+                },
+                {
+                  code: 'Df7kK4-knTE',
+                  video_versions: [{ url: `https://scontent.cdninstagram.com/v/t51/target_df7k.mp4?efg=${progressiveEfg}`, width: 1080, height: 1920 }]
+                }
+              ]
+            }
+          }
+        }
+      }]]]]
+    })}</script>
+  </body></html>
+`;
+const extracted = api.extractThreadsVideosFromHtml(sampleThreadsHtml, 'Df7kK4-knTE');
+assert.equal(extracted.length, 1);
+assert.equal(extracted[0].url, `https://scontent.cdninstagram.com/v/t51/target_df7k.mp4?efg=${progressiveEfg}`);
 
 console.log('content logic tests passed');

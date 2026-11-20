@@ -1379,6 +1379,130 @@
     return null;
   }
 
+  function findThreadsPostUrlForElement(videoElement) {
+    const pathname = window.location.pathname || '';
+    if (/\/post\/[A-Za-z0-9_-]{5,}/.test(pathname)) {
+      return window.location.origin + pathname;
+    }
+
+    let anc = videoElement?.parentElement;
+    for (let d = 0; anc && d < 14 && anc !== document.body; d++, anc = anc.parentElement) {
+      if (anc.tagName === 'A') {
+        const href = anc.getAttribute('href') || '';
+        if (/\/post\/[A-Za-z0-9_-]{5,}/.test(href)) {
+          return new URL(href, window.location.origin).href;
+        }
+      }
+      const vids = anc.querySelectorAll?.('video') || [];
+      if (vids.length >= 1 && vids.length <= 6) {
+        const link = anc.querySelector('a[href*="/post/"]');
+        const href = link?.getAttribute('href') || '';
+        if (/\/post\/[A-Za-z0-9_-]{5,}/.test(href)) {
+          return new URL(href, window.location.origin).href;
+        }
+      } else if (vids.length > 6) {
+        break;
+      }
+    }
+    return null;
+  }
+
+  function extractThreadsVideosFromHtml(html, targetShortcode) {
+    if (!html || typeof html !== 'string') return [];
+    const results = [];
+    const seenFiles = new Set();
+    const scriptRegex = /<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    let match;
+
+    const walk = (node, depth, inheritedCode) => {
+      if (!node || typeof node !== 'object' || depth > 40) return;
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item, depth + 1, inheritedCode);
+        return;
+      }
+
+      const ownCode =
+        (typeof node.code === 'string' && node.code.length >= 5 && node.code) ||
+        (typeof node.shortcode === 'string' && node.shortcode.length >= 5 && node.shortcode) ||
+        null;
+      const currentCode = ownCode || inheritedCode;
+
+      if (Array.isArray(node.video_versions) && node.video_versions.length > 0) {
+        if (!targetShortcode || currentCode === targetShortcode) {
+          const url = getInstagramVideoUrl(node);
+          if (url) {
+            const path = getComparableInstagramMediaPath(url) || url;
+            const fileKey = path.split('/').pop() || url;
+            if (!seenFiles.has(fileKey)) {
+              seenFiles.add(fileKey);
+              results.push({
+                url,
+                duration: getInstagramItemDuration(node)
+              });
+            }
+          }
+        }
+      }
+
+      for (const key of Object.keys(node)) {
+        if (key === 'video_versions') continue;
+        const val = node[key];
+        if (val && typeof val === 'object') {
+          walk(val, depth + 1, currentCode);
+        }
+      }
+    };
+
+    while ((match = scriptRegex.exec(html)) !== null) {
+      const body = match[1];
+      if (!body || !body.includes('video_versions')) continue;
+      if (targetShortcode && !body.includes(targetShortcode)) continue;
+      try {
+        walk(JSON.parse(body), 0, null);
+      } catch (e) {}
+    }
+
+    return results;
+  }
+
+  async function fetchThreadsPostVideo(videoElement) {
+    const postUrl = findThreadsPostUrlForElement(videoElement);
+    if (!postUrl) return null;
+    const codeMatch = postUrl.match(/\/post\/([A-Za-z0-9_-]{5,})/);
+    const targetShortcode = codeMatch ? codeMatch[1] : null;
+    if (!targetShortcode) return null;
+
+    try {
+      const res = await fetch(postUrl, { credentials: 'include' });
+      if (!res.ok) return null;
+      const html = await res.text();
+      const videos = extractThreadsVideosFromHtml(html, targetShortcode);
+      if (videos.length === 0) return null;
+      if (videos.length === 1) return videos[0].url;
+
+      const currentDuration = Number(videoElement?.duration);
+      if (Number.isFinite(currentDuration) && currentDuration > 0) {
+        const dm = videos.filter(v => v.duration !== null && Math.abs(v.duration - currentDuration) < 0.75);
+        if (dm.length === 1) return dm[0].url;
+      }
+
+      // Match by sibling <video> index inside the post container
+      let anc = videoElement?.parentElement;
+      for (let d = 0; anc && d < 12 && anc !== document.body; d++, anc = anc.parentElement) {
+        const vids = [...(anc.querySelectorAll?.('video') || [])];
+        if (vids.length === videos.length) {
+          const idx = vids.indexOf(videoElement);
+          if (idx >= 0 && idx < videos.length) return videos[idx].url;
+        } else if (vids.length > videos.length) {
+          break;
+        }
+      }
+    } catch (e) {
+      console.warn('[Social Media Downloader] Threads post HTML fallback failed:', e);
+    }
+    return null;
+  }
+
   // Video Source Resolver (Prioritizes Combined Video+Audio Progressive Stream)
   async function getVideoUrl(videoElement) {
     // 1. Prefer the source attached to the exact DOM video element.
@@ -1425,6 +1549,12 @@
         const postVideoUrl = await fetchInstagramProgressiveVideo(shortcode, videoElement);
         if (postVideoUrl && isProgressiveVideoUrl(postVideoUrl)) return postVideoUrl;
       }
+    }
+
+    // 4b. Threads on-demand post HTML fallback (when GraphQL stream wasn't captured)
+    if (isThreads) {
+      const threadsVideoUrl = await fetchThreadsPostVideo(videoElement);
+      if (threadsVideoUrl && isProgressiveVideoUrl(threadsVideoUrl, true)) return threadsVideoUrl;
     }
 
     // 5. On Meta platforms (IG / Threads / FB), NEVER blindly fall back to global
